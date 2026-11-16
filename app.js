@@ -32,6 +32,16 @@ function toast(m, undo) {
 }
 const hash = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) } return (h >>> 0) / 4294967296 };
 
+/* ---------- theme ---------- */
+const themePref = () => { try { return localStorage.getItem("gsd_theme") || "auto" } catch { return "auto" } };
+function applyTheme() {
+  const p = themePref(), dark = p === "dark" || (p === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  $("#themecolor")?.setAttribute("content", dark ? "#000000" : "#ffffff");
+  return dark;
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { applyTheme(); if (S.screen === "app") render() });
+
 /* ---------- state ---------- */
 const S = { screen: "boot", user: null, profile: null, items: [], actions: [], cards: [], challenges: [], focus: null, tokens: [],
   tab: "home", sheet: null, q: "", area: "", lib: "all", actTab: "doing", mode: "inspire", seen: new Set(), swapped: [], ask: null,
@@ -259,6 +269,8 @@ function vProfile() {
     <div class="row" style="margin-top:12px"><button class="chip ${p.commitment === "action_first" ? "on" : ""}" data-act="commit">${p.commitment === "action_first" ? "✓ " : ""}Pause before social apps (gate)</button>
     <button class="chip ${p.auto_remember ? "on" : ""}" data-act="autorem">${p.auto_remember ? "✓ " : ""}Help me remember what I learn, automatically</button></div>
     <p class="tiny" style="margin-top:8px">Never enforced, never counted against you.</p></div>
+  <div class="sec"><div class="hd"><h2>Appearance</h2></div>
+    <div class="chips">${[["auto", "Match my device"], ["light", "☀️ Light"], ["dark", "🌙 Dark"]].map(([k, n]) => `<button class="chip ${themePref() === k ? "on" : ""}" data-act="theme" data-id="${k}">${n}</button>`).join("")}</div></div>
   <div class="sec"><div class="hd"><h2>Save from anywhere</h2></div>
     <div class="row"><button class="btn ghost" data-act="capsetup">📱 Set up iPhone share sheet</button></div>
     <p class="small mute" style="margin-top:10px"><b>Computer:</b> add a bookmark with this address, then click it on any page:</p>
@@ -374,7 +386,7 @@ function render() {
   app.innerHTML = `<div class="shell"><aside class="side"><div class="logo"><i></i>GSD</div>
     ${TABS.map(([k, e, n]) => `<button class="nav ${S.tab === k ? "on" : ""}" data-act="tab" data-id="${k}"><span aria-hidden="true">${e}</span>${n}</button>`).join("")}
     <button class="btn" data-act="save">+ Save something</button></aside>
-    <main><div class="top"><div class="logo"><i></i>GSD</div><span></span></div>${view}</main>
+    <main><div class="top"><div class="logo"><i></i>GSD</div><button class="chip" data-act="theme" data-id="flip" aria-label="Switch between light and dark mode" style="margin-left:auto">${document.documentElement.dataset.theme === "dark" ? "☀️ Light" : "🌙 Dark"}</button></div>${view}</main>
     <nav class="tabs" aria-label="Main">${TABS.slice(0, 2).map(tabBtn).join("")}<button class="plus" data-act="save" aria-label="Save something">+</button>${TABS.slice(2).map(tabBtn).join("")}</nav></div>`;
   if (S.tab === "explore") watchFeed();
 }
@@ -503,6 +515,7 @@ const H = {
     const links = { instagram: "instagram://", youtube: "youtube://", x: "twitter://", twitter: "twitter://", reddit: "reddit://", tiktok: "https://www.tiktok.com/", facebook: "fb://" };
     S.sheet = null; refresh(); if (links[app]) location.href = links[app];
   },
+  theme(v) { if (v === "flip") v = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; try { localStorage.setItem("gsd_theme", v) } catch {} applyTheme(); render() },
   authmode() { S.authMode = S.authMode === "up" ? "in" : "up"; S.authMsg = ""; render() },
   async signout() { await sb.auth.signOut(); S.screen = "auth"; S.sheet = null; refresh() },
 };

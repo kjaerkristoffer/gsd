@@ -7,16 +7,21 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="GSD">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" id="themecolor" content="#ffffff">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23000'/%3E%3Ctext x='32' y='41' font-family='system-ui' font-weight='800' font-style='italic' font-size='24' text-anchor='middle' fill='%23fff'%3EGSD%3C/text%3E%3C/svg%3E">
+<script>
+(function(){var p="auto";try{p=localStorage.getItem("gsd_theme")||"auto"}catch(e){}
+var d=p==="dark"||(p==="auto"&&matchMedia("(prefers-color-scheme: dark)").matches);
+document.documentElement.setAttribute("data-theme",d?"dark":"light")})();
+</script>
 <style>
 :root{--bg:#fff;--fg:#000;--card:#fff;--soft:#f5f5f5;--softer:#fafafa;--line:#e5e5e5;--mute:#737373;--subtle:#999;
 --green:#16a34a;--green-bg:#f0fdf4;--red:#dc2626;--red-bg:#fef2f2;--blue:#0ea5e9;--blue-bg:#eff6ff;--orange:#f59e0b;--r:16px}
-@media (prefers-color-scheme:dark){:root{--bg:#000;--fg:#fff;--card:#0d0d0d;--soft:#171717;--softer:#0d0d0d;--line:#262626;--mute:#a3a3a3;--subtle:#737373;
---green-bg:#052e16;--red-bg:#2a0a0a;--blue-bg:#0b1b33}}
+:root[data-theme=dark]{--bg:#000;--fg:#fff;--card:#0d0d0d;--soft:#171717;--softer:#0d0d0d;--line:#262626;--mute:#a3a3a3;--subtle:#737373;
+--green-bg:#052e16;--red-bg:#2a0a0a;--blue-bg:#0b1b33}
+:root[data-theme=dark]{color-scheme:dark}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
 button,input,textarea,select{font:inherit;color:inherit}
