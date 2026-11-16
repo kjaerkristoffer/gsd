@@ -164,9 +164,10 @@ function actRow(a, extra = "") {
     ${a.why && a.status !== "done" ? `<p class="small" style="margin-top:8px">${esc(a.why)}</p>` : ""}
     ${a.status !== "done" && a.first_step ? `<p class="small" style="margin-top:8px"><b>Start:</b> ${esc(a.first_step)}</p>` : ""}
     ${a.status === "doing" && a.steps?.length ? `<ul class="tk small">${a.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : ""}
-    ${a.status === "done" ? `<div class="tiny" style="margin-top:6px">Done ${ago(a.done_at)}</div>${a.reflection ? `<blockquote class="small">${esc(a.reflection)}</blockquote>` : ""}` : ""}
+    ${a.status === "done" ? `<div class="tiny" style="margin-top:6px">Done ${ago(a.done_at)}</div>` : ""}${a.reflection && !a.reflection.startsWith("dismissed:") && a.status !== "suggested" ? `<blockquote class="small" style="white-space:pre-wrap">${esc(a.reflection)}</blockquote>` : ""}
     <div class="row" style="margin-top:12px">${extra || (a.status === "suggested" ? `<button class="btn sm" data-act="start" data-id="${a.id}">Do this</button><button class="btn sm ghost" data-act="dismiss" data-id="${a.id}">Not for me</button>`
       : a.status === "doing" ? `<button class="btn sm keep" data-act="done" data-id="${a.id}">✅ GSD</button><button class="btn sm ghost" data-act="later" data-id="${a.id}">Later</button>` : "")}
+      ${a.status === "doing" || a.status === "done" ? `<button class="btn sm ghost" data-act="note" data-id="${a.id}">📝 Note</button>` : ""}
       ${safeUrl(a.link) && a.status !== "done" ? `<a class="btn sm line" href="${esc(safeUrl(a.link))}" target="_blank" rel="noopener noreferrer">${esc(a.link_label || "Open it")} ↗</a>` : ""}
       ${it ? `<button class="btn sm line" data-act="open" data-id="${it.id}">Source</button>` : ""}</div>
   </div></div></div>`;
@@ -207,11 +208,11 @@ function libList() {
   return l.length ? `<div class="grid">${l.map(tile).join("")}</div>` : `<p class="mute" style="padding:30px 0;text-align:center">${q ? "Nothing matches. Try Ask for questions in your own words." : "Nothing here."}</p>`;
 }
 function vLibrary() {
-  const areas = [...new Set(live().map(i => i.area))].sort();
+  const areas = [...new Set(live().map(i => i.area))].sort((a, b) => (b === "Wisdom") - (a === "Wisdom") || a.localeCompare(b));
   return `<h1>Library</h1>
   <div class="sec"><input class="field" id="q" type="search" placeholder="Search your saves" value="${esc(S.q)}" aria-label="Search your saves"></div>
   <div class="scroll" style="margin-top:12px">${[["all", "All"], ["inbox", "Unsorted"], ["let_go", "Let go"]].map(([k, n]) => `<button class="chip ${S.lib === k && !S.area ? "on" : ""}" data-act="lib" data-id="${k}">${n}</button>`).join("")}
-    ${areas.map(t => `<button class="chip ${S.area === t ? "on" : ""}" data-act="area" data-id="${esc(t)}">${esc(t)}</button>`).join("")}</div>
+    ${areas.map(t => `<button class="chip ${S.area === t ? "on" : ""}" data-act="area" data-id="${esc(t)}">${t === "Wisdom" ? "💎 " : ""}${esc(t)}</button>`).join("")}</div>
   <div class="sec" id="libgrid">${libList()}</div>`;
 }
 function feed() {
@@ -319,10 +320,15 @@ function sheetHtml() {
       ${s.show ? `<div class="card soft" style="margin-top:14px">${esc(c.a)}</div>
         <div class="row" style="margin-top:16px"><button class="btn keep" style="flex:1" data-act="rc" data-id="${c.id}|got">Got it</button><button class="btn ghost" style="flex:1" data-act="rc" data-id="${c.id}|almost">Almost</button><button class="btn ghost" style="flex:1" data-act="rc" data-id="${c.id}|forgot">Forgot</button></div>`
         : `<button class="btn" style="margin-top:16px" data-act="reveal">Show answer</button>`}` }
-  if (s.type === "done") { const a = S.actions.find(x => x.id === s.id);
-    b = `<h2>Nice. <em>GSD.</em></h2><p class="mute" style="margin-top:4px">${esc(a.title)}</p><label class="l" for="rf">How did it go? (optional)</label><textarea class="field" id="rf" placeholder="One line is plenty"></textarea>
-    <label class="row small" style="margin-top:12px"><input type="checkbox" id="again"> Would do again</label>
-    <div class="row" style="margin-top:16px"><button class="btn" data-act="finish" data-id="${a.id}">Mark as done</button></div>` }
+  if (s.type === "done") { const a = S.actions.find(x => x.id === s.id), noteOnly = s.mode === "note", text = s.text ?? a.reflection ?? "";
+    b = `${noteOnly ? `<h2>Note</h2>` : `<h2>Nice. <em>GSD.</em></h2>`}<p class="mute" style="margin-top:4px">${esc(a.title)}</p>
+    <label class="l" for="rf">${noteOnly ? "What did you notice or learn?" : "How did it go? (optional)"}</label><textarea class="field" id="rf" style="min-height:140px" placeholder="${noteOnly ? "A thought, a quote, a next idea" : "One line is plenty"}">${esc(text)}</textarea>
+    ${noteOnly ? "" : `<label class="row small" style="margin-top:12px"><input type="checkbox" id="again" ${s.again ? "checked" : ""}> Would do again</label>`}
+    <div class="tiny" style="margin-top:14px">Also do this with the note</div>
+    <div class="row" style="margin-top:8px"><button class="chip ${s.wis ? "on" : ""}" data-act="tog" data-id="wis">${s.wis ? "✓ " : ""}💎 Save to Wisdom</button>
+      <button class="chip ${s.act ? "on" : ""}" data-act="tog" data-id="act">${s.act ? "✓ " : ""}⚡ Make it a new action</button></div>
+    ${s.act ? `<label class="l" for="na">The new action</label><input class="field" id="na" placeholder="Start with a verb" value="${esc(s.na ?? "")}">` : ""}
+    <div class="row" style="margin-top:16px"><button class="btn" data-act="finish" data-id="${a.id}">${noteOnly ? "Save note" : "Mark as done"}</button></div>` }
   if (s.type === "dismiss") b = `<h2>Not for you?</h2><p class="small mute" style="margin-top:4px">Optional: tell GSD why, so suggestions get better.</p>
     <div class="chips" style="margin-top:14px">${[["big", "Too big"], ["no", "Not interested"], ["did", "Did it already"]].map(([k, n]) => `<button class="chip" data-act="dismissed" data-id="${s.id}|${k}">${n}</button>`).join("")}</div>`;
   if (s.type === "ask") b = `<h2>Ask your library</h2><form data-form="ask" style="margin-top:12px"><input class="field" id="aq" placeholder="What could I try this weekend?" value="${esc(S.ask?.q || "")}" aria-label="Your question">
@@ -365,7 +371,7 @@ function itemSheet(it) {
     <div class="chips" style="margin-top:10px"><span class="chip b">${esc(it.area)}</span>${(it.tags || []).map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div>
     ${it.stage === "failed" ? `<div class="banner" style="margin-top:14px;background:var(--red-bg);color:var(--red)">${esc(ERR[it.error_code] || "Something went wrong reading this.")}${it.diag ? `<br><span class="tiny" style="color:inherit;opacity:.8">Details: ${esc(it.diag)}</span>` : ""}</div>`
       : it.quality === "caption_only" ? `<p class="tiny" style="margin-top:10px">Read from the caption only.</p>` : it.quality === "title_only" ? `<p class="tiny" style="margin-top:10px">Only the title was readable.</p>` : ""}
-    ${it.summary ? `<p style="margin-top:14px">${esc(it.summary)}</p>` : ""}
+    ${it.summary ? `<p style="margin-top:14px;white-space:pre-wrap">${esc(it.summary)}</p>` : ""}
     ${it.takeaways?.length ? `<ul class="tk">${it.takeaways.map(k => `<li>${esc(k.text)}${k.t != null && it.source === "youtube" && u ? ` <a class="chip" style="padding:2px 8px" target="_blank" rel="noopener noreferrer" href="${esc(u + (u.includes("?") ? "&" : "?") + "t=" + k.t + "s")}">${t(k.t)}</a>` : ""}</li>`).join("")}</ul>` : ""}
     ${(it.quotes || []).map(q => `<blockquote>${esc(q)}</blockquote>`).join("")}
     ${e.place?.name ? (() => { const q = encodeURIComponent([e.place.name, e.place.address, e.place.city].filter(Boolean).join(" ")), site = safeUrl(e.place.website) || safeUrl((it.resources || []).find(r => r.type === "place" && r.url)?.url);
@@ -397,7 +403,7 @@ function itemSheet(it) {
       ${S.cards.some(c => c.item_id === it.id) ? `<button class="btn sm ${it.remember ? "" : "ghost"}" data-act="remember" data-id="${it.id}">🧠 ${it.remember ? "Remembering" : "Help me remember"}</button>` : ""}
       ${it.status !== "kept" ? `<button class="btn sm keep" data-act="keep" data-id="${it.id}">💚 Keep</button>` : ""}
       ${it.status !== "let_go" ? `<button class="btn sm drop" data-act="letgo" data-id="${it.id}">Let go</button>` : ""}
-      <button class="btn sm ghost" data-act="reprocess" data-id="${it.id}">Re-read</button>
+      ${it.area === "Wisdom" && it.source === "note" ? "" : `<button class="btn sm ghost" data-act="reprocess" data-id="${it.id}">Re-read</button>`}
       <button class="btn sm ghost" data-act="delete" data-id="${it.id}">${confirmDel === it.id ? "Tap again to delete forever" : "Delete"}</button></div>`;
 }
 
@@ -493,12 +499,26 @@ const H = {
     if (why === "did") await api.upd("actions", id, { status: "done", done_at: now() }); else await api.upd("actions", id, { status: "dismissed", reflection: why === "big" ? "dismissed: too big" : "dismissed: not interested" });
     S.sheet = back?.type === "item" ? back : null; refresh() },
   done(id) { openSheet({ type: "done", id, back: S.sheet }) },
+  note(id) { openSheet({ type: "done", id, mode: "note", back: S.sheet }) },
+  tog(k) { const sh = S.sheet; sh.text = $("#rf").value; sh.again = $("#again")?.checked; sh.na = $("#na")?.value ?? sh.na; sh[k] = !sh[k];
+    if (k === "act" && sh.act && !sh.na) sh.na = (sh.text.split(/(?<=[.!?])\s|\n/)[0] || "").trim().slice(0, 160);
+    renderSheet(); if (k === "act" && sh.act) $("#na")?.focus() },
   async finish(id) {
-    const a = S.actions.find(x => x.id === id), back = S.sheet?.back;
-    await api.upd("actions", id, { status: "done", done_at: now(), reflection: $("#rf").value.trim(), again: $("#again").checked || null });
-    if (a?.item_id && item(a.item_id)?.status === "inbox") await api.upd("items", a.item_id, { status: "kept" });
-    if (S.focus?.action_id === id) await api.setFocus({ state: "done" });
-    S.sheet = back?.type === "item" ? back : null; refresh(); toast("✅ GSD");
+    const a = S.actions.find(x => x.id === id), sh = S.sheet, back = sh?.back, text = $("#rf").value.trim(), na = ($("#na")?.value || "").trim();
+    if (sh.mode === "note") await api.upd("actions", id, { reflection: text });
+    else {
+      await api.upd("actions", id, { status: "done", done_at: now(), reflection: text, again: $("#again")?.checked || null });
+      if (a?.item_id && item(a.item_id)?.status === "inbox") await api.upd("items", a.item_id, { status: "kept" });
+      if (S.focus?.action_id === id) await api.setFocus({ state: "done" });
+    }
+    let extra = "";
+    if (sh.wis && text) {
+      const { data, error } = await sb.from("items").insert({ source: "note", kind: "quote", via: "app", title: text.split("\n")[0].slice(0, 80), summary: text, insight: text.slice(0, 240), content_text: text,
+        area: "Wisdom", area_locked: true, status: "kept", stage: "ready", quality: "full", note: "From: " + a.title }).select(ITEM_COLS).single();
+      if (error) toast("Couldn't save to Wisdom"); else { S.items.unshift(data); extra = " · saved to Wisdom" }
+    }
+    if (sh.act && na) { await api.ins("actions", { item_id: a.item_id || null, title: na.slice(0, 160), why: "From your note on: " + a.title, mode: a.mode, origin: "user", status: "suggested", minutes: S.profile.daily_minutes || 15 }); extra += " · new action added" }
+    S.sheet = back?.type === "item" ? back : null; refresh(); toast((sh.mode === "note" ? "Note saved" : "✅ GSD") + extra);
   },
   async swap() { const f = focusAction(); if (f) S.swapped.push(f.id); const n = rank(S.swapped)[0];
     if (n) { await api.setFocus({ action_id: n.id, state: "offered", swaps: (S.focus?.swaps || 0) + 1 }); render() } else toast("That's the only idea right now") },
