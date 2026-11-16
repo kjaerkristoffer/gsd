@@ -13,13 +13,16 @@ const ago = t => { const d = Math.floor((Date.now() - new Date(t)) / 864e5); ret
 const KIND = { video: "🎬", article: "📚", place: "📍", recipe: "🍽️", book: "📖", quote: "💬", idea: "💡", tool: "🛠️", workout: "🏃", product: "🛍️", event: "🎟️", music: "🎵", note: "📝", other: "✨" };
 const MODE = { learn: ["📚", "Learn"], create: ["🎨", "Create"], build: ["🛠️", "Build"], grow: ["🌱", "Grow"], experience: ["📍", "Experience"] };
 const LADDER = [1, 3, 7, 14, 30, 60, 120];
-const ITEM_COLS = "id,url,canonical_url,source,kind,title,author,thumb_path,start_seconds,summary,insight,takeaways,quotes,entities,area,tags,note,status,stage,error_code,quality,resaved_count,remember,last_surfaced_at,opened_count,created_at";
+const ITEM_COLS = "id,url,canonical_url,source,kind,title,author,thumb_path,start_seconds,summary,insight,takeaways,quotes,entities,area,tags,note,status,stage,error_code,quality,resaved_count,remember,last_surfaced_at,opened_count,created_at,diag";
 const ERR = {
   private_or_missing: "This post is private or was removed. GSD can only read public links.",
   unreadable: "GSD couldn't read this page. You can still add your own note.",
   unsupported_type: "This kind of file isn't supported yet.",
   provider_down: "Reading it took too long. Tap Re-read to try again.",
   ai_error: "Something went wrong understanding this. Tap Re-read.",
+  no_content: "The reader couldn't get anything from this post. It may be private, or the reader service refused it. Tap Re-read to try again.",
+  reader_not_configured: "The transcript key isn't working (Supabase → Edge Functions → Secrets → SUPADATA_API_KEY). Then tap Re-read.",
+  reader_limit: "The transcript service has run out of credits for now. Top up at supadata.ai, then tap Re-read.",
   ai_not_configured: "The AI key isn't set up yet (Supabase → Edge Functions → Secrets → OPENAI_API_KEY). Then tap Re-read.",
 };
 function toast(m, undo) {
@@ -328,7 +331,7 @@ function itemSheet(it) {
     <div class="tiny">${KIND[it.kind] || ""} ${esc(it.kind)} · ${esc(it.source || "")}${it.author ? " · " + esc(it.author) : ""} · saved ${ago(it.created_at)}${it.resaved_count ? ` · saved ${it.resaved_count + 1} times` : ""}</div>
     <h2 style="margin-top:6px">${esc(it.title || "Untitled")}</h2>
     <div class="chips" style="margin-top:10px"><span class="chip b">${esc(it.area)}</span>${(it.tags || []).map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div>
-    ${it.stage === "failed" ? `<div class="banner" style="margin-top:14px;background:var(--red-bg);color:var(--red)">${esc(ERR[it.error_code] || "Something went wrong reading this.")}</div>`
+    ${it.stage === "failed" ? `<div class="banner" style="margin-top:14px;background:var(--red-bg);color:var(--red)">${esc(ERR[it.error_code] || "Something went wrong reading this.")}${it.diag ? `<br><span class="tiny" style="color:inherit;opacity:.8">Details: ${esc(it.diag)}</span>` : ""}</div>`
       : it.quality === "caption_only" ? `<p class="tiny" style="margin-top:10px">Read from the caption only.</p>` : it.quality === "title_only" ? `<p class="tiny" style="margin-top:10px">Only the title was readable.</p>` : ""}
     ${it.summary ? `<p style="margin-top:14px">${esc(it.summary)}</p>` : ""}
     ${it.takeaways?.length ? `<ul class="tk">${it.takeaways.map(k => `<li>${esc(k.text)}${k.t != null && it.source === "youtube" && u ? ` <a class="chip" style="padding:2px 8px" target="_blank" rel="noopener noreferrer" href="${esc(u + (u.includes("?") ? "&" : "?") + "t=" + k.t + "s")}">${t(k.t)}</a>` : ""}</li>`).join("")}</ul>` : ""}
