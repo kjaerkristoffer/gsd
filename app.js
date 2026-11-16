@@ -277,7 +277,11 @@ function vProfile() {
     <label class="l" for="mins">Time you usually have for one thing</label>
     <select class="field" id="mins" data-save="daily_minutes">${[5, 10, 15, 30, 45, 60].map(m => `<option value="${m}" ${p.daily_minutes == m ? "selected" : ""}>${m} minutes</option>`).join("")}</select>
     <label class="l" for="city">Your city (for places)</label>
-    <input class="field" id="city" data-save="city" value="${esc(p.city)}" placeholder="e.g. Copenhagen"></div>
+    <input class="field" id="city" data-save="city" value="${esc(p.city)}" placeholder="e.g. Copenhagen">
+    <label class="l" for="country">Your country (links go to its version of a site when there is one)</label>
+    <input class="field" id="country" data-save="country" value="${esc(p.country ?? "Denmark")}" placeholder="e.g. Denmark">
+    <label class="l" for="prefs">Standing instructions for the AI</label>
+    <textarea class="field" id="prefs" data-save="preferences" placeholder="e.g. Prefer free sources. Skip crypto. Suggest things I can do with my kids.">${esc(p.preferences ?? "")}</textarea></div>
   <div class="sec"><div class="hd"><h2>Intentional scrolling</h2></div>
     <label class="l" for="intention" style="margin-top:0">Your intention (optional)</label>
     <input class="field" id="intention" data-save="intention" placeholder="e.g. One small action before I scroll" value="${esc(p.intention)}">
