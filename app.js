@@ -12,8 +12,13 @@ const now = () => new Date().toISOString();
 const ago = t => { const d = Math.floor((Date.now() - new Date(t)) / 864e5); return d < 1 ? "today" : d === 1 ? "yesterday" : d < 30 ? d + " days ago" : d < 365 ? Math.floor(d / 30) + " mo ago" : Math.floor(d / 365) + " y ago" };
 const KIND = { video: "🎬", article: "📚", place: "📍", recipe: "🍽️", book: "📖", quote: "💬", idea: "💡", tool: "🛠️", workout: "🏃", product: "🛍️", event: "🎟️", music: "🎵", note: "📝", other: "✨" };
 const MODE = { learn: ["📚", "Learn"], create: ["🎨", "Create"], build: ["🛠️", "Build"], grow: ["🌱", "Grow"], experience: ["📍", "Experience"] };
+const RES = { article: "📰", book: "📖", paper: "📄", film: "🎬", show: "📺", podcast: "🎧", video: "▶️", tool: "🛠️", repo: "💻", course: "🎓", product: "🛍️", place: "📍", person: "👤", music: "🎵", other: "✨" };
+const RES_LABEL = { article: "Read it", paper: "Read the paper", book: "See the book", film: "Where to watch", show: "Where to watch", podcast: "Play it", video: "Watch it", tool: "Open it", repo: "Open the repo", course: "Open the course", place: "Website", product: "See it", person: "Their page", music: "Play it", other: "Open it" };
+// Rough OpenAI prices in dollars per million tokens (input, output), plus one cent per web search.
+const PRICE = { "gpt-6-luna": [.1, .5], "gpt-6.1-terra": [1, 5], "gpt-6.1-sol": [2, 10], "gpt-6-astra": [10, 50], "text-embedding-3-small": [.02, 0] };
+const BUDGET = 5;
 const LADDER = [1, 3, 7, 14, 30, 60, 120];
-const ITEM_COLS = "id,url,canonical_url,source,kind,title,author,thumb_path,start_seconds,summary,insight,takeaways,quotes,entities,area,tags,note,status,stage,error_code,quality,resaved_count,remember,last_surfaced_at,opened_count,created_at,diag";
+const ITEM_COLS = "id,url,canonical_url,source,kind,title,author,thumb_path,start_seconds,summary,insight,takeaways,quotes,entities,area,tags,note,status,stage,error_code,quality,resaved_count,remember,last_surfaced_at,opened_count,created_at,diag,resources,enrich_state";
 const ERR = {
   private_or_missing: "This post is private or was removed. GSD can only read public links.",
   unreadable: "GSD couldn't read this page. You can still add your own note.",
@@ -52,15 +57,17 @@ let sb = null, confirmDel = null;
 const must = r => { if (r.error) throw r.error; return r.data };
 const api = {
   async load() {
-    const [p, i, a, c, ch, f] = await Promise.all([
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+    const [p, i, a, c, ch, f, u] = await Promise.all([
       sb.from("profiles").select("*").eq("user_id", S.user.id).maybeSingle(),
       sb.from("items").select(ITEM_COLS).order("created_at", { ascending: false }).limit(1000),
       sb.from("actions").select("*").order("created_at", { ascending: false }).limit(3000),
       sb.from("recall_cards").select("id,item_id,q,a,active,step,due").limit(5000),
       sb.from("challenges").select("*").eq("active", true).order("created_at", { ascending: false }),
       sb.from("daily_focus").select("*").eq("day", iso()).maybeSingle(),
+      sb.from("ai_calls").select("job,model,in_tokens,out_tokens,searches").gte("created_at", monthStart).limit(5000),
     ]);
-    S.profile = must(p); S.items = must(i); S.actions = must(a); S.cards = must(c); S.challenges = must(ch); S.focus = must(f);
+    S.profile = must(p); S.items = must(i); S.actions = must(a); S.cards = must(c); S.challenges = must(ch); S.focus = must(f); S.usage = u.data || [];
   },
   async upd(table, id, patch) {
     const key = table === "recall_cards" ? "cards" : table;
@@ -104,6 +111,12 @@ const api = {
 /* ---------- derived ---------- */
 const item = id => S.items.find(i => i.id === id);
 const pending = i => !["ready", "failed"].includes(i.stage);
+const busy = i => pending(i) || i.enrich_state === "pending";
+function spend() {
+  let total = 0, saves = 0;
+  for (const c of S.usage || []) { const p = PRICE[c.model] || [2, 10]; total += (c.in_tokens * p[0] + c.out_tokens * p[1]) / 1e6 + (c.searches || 0) * .01; if (c.job === "understand") saves++ }
+  return { total, saves };
+}
 const live = () => S.items.filter(i => i.status !== "let_go");
 const inbox = () => S.items.filter(i => i.status === "inbox" && !pending(i));
 const doneActs = () => S.actions.filter(a => a.status === "done");
@@ -154,6 +167,7 @@ function actRow(a, extra = "") {
     ${a.status === "done" ? `<div class="tiny" style="margin-top:6px">Done ${ago(a.done_at)}</div>${a.reflection ? `<blockquote class="small">${esc(a.reflection)}</blockquote>` : ""}` : ""}
     <div class="row" style="margin-top:12px">${extra || (a.status === "suggested" ? `<button class="btn sm" data-act="start" data-id="${a.id}">Do this</button><button class="btn sm ghost" data-act="dismiss" data-id="${a.id}">Not for me</button>`
       : a.status === "doing" ? `<button class="btn sm keep" data-act="done" data-id="${a.id}">✅ GSD</button><button class="btn sm ghost" data-act="later" data-id="${a.id}">Later</button>` : "")}
+      ${safeUrl(a.link) && a.status !== "done" ? `<a class="btn sm line" href="${esc(safeUrl(a.link))}" target="_blank" rel="noopener noreferrer">${esc(a.link_label || "Open it")} ↗</a>` : ""}
       ${it ? `<button class="btn sm line" data-act="open" data-id="${it.id}">Source</button>` : ""}</div>
   </div></div></div>`;
 }
@@ -269,6 +283,12 @@ function vProfile() {
     <div class="row" style="margin-top:12px"><button class="chip ${p.commitment === "action_first" ? "on" : ""}" data-act="commit">${p.commitment === "action_first" ? "✓ " : ""}Pause before social apps (gate)</button>
     <button class="chip ${p.auto_remember ? "on" : ""}" data-act="autorem">${p.auto_remember ? "✓ " : ""}Help me remember what I learn, automatically</button></div>
     <p class="tiny" style="margin-top:8px">Never enforced, never counted against you.</p></div>
+  <div class="sec"><div class="hd"><h2>Reading and AI</h2></div>
+    ${(() => { const sp = spend(); return `<div class="card soft"><div class="row" style="justify-content:space-between"><h3>≈ $${sp.total.toFixed(2)} this month</h3><span class="small mute">guide: $${BUDGET}</span></div>
+      <div class="bar" style="margin:10px 0 6px"><i style="width:${Math.min(100, 100 * sp.total / BUDGET)}%"></i></div>
+      <div class="tiny">${sp.saves} save${sp.saves === 1 ? "" : "s"} read${sp.saves ? ` · about $${(sp.total / sp.saves).toFixed(2)} each` : ""}. An estimate from token counts; your OpenAI bill is the real number. Nothing is blocked at $${BUDGET}. Transcripts are billed separately by Supadata.</div></div>` })()}
+    <div class="row" style="margin-top:12px"><button class="chip ${p.watch_video !== false ? "on" : ""}" data-act="watch">${p.watch_video !== false ? "✓ " : ""}Watch short videos too (reads on-screen text)</button></div>
+    <p class="tiny" style="margin-top:8px">Watching uses about 5 extra Supadata credits per minute of video. Clips up to 3 minutes only.</p></div>
   <div class="sec"><div class="hd"><h2>Appearance</h2></div>
     <div class="chips">${[["auto", "Match my device"], ["light", "☀️ Light"], ["dark", "🌙 Dark"]].map(([k, n]) => `<button class="chip ${themePref() === k ? "on" : ""}" data-act="theme" data-id="${k}">${n}</button>`).join("")}</div></div>
   <div class="sec"><div class="hd"><h2>Save from anywhere</h2></div>
@@ -336,8 +356,8 @@ function sheetHtml() {
 }
 function itemSheet(it) {
   if (!it) return "<p>This save is gone.</p>";
-  const acts = S.actions.filter(a => a.item_id === it.id && a.status !== "dismissed"), e = it.entities || {}, u = safeUrl(it.url), rel = S.related[it.id];
-  if (pending(it)) return `${thumb(it, "thumb hero")}<h2><span class="spin"></span> Reading it…</h2><p class="mute" style="margin-top:6px;word-break:break-all">${esc(it.url || it.title || "")}</p><p class="small mute" style="margin-top:10px">Usually 10–60 seconds; long videos take a little longer. You can close this.</p>`;
+  const acts = S.actions.filter(a => a.item_id === it.id && a.status !== "dismissed").sort((x, y) => (x.resource_idx ?? 99) - (y.resource_idx ?? 99)), e = it.entities || {}, u = safeUrl(it.url), rel = S.related[it.id];
+  if (pending(it)) return `${thumb(it, "thumb hero")}<h2><span class="spin"></span> Reading it…</h2><p class="mute" style="margin-top:6px;word-break:break-all">${esc(it.url || it.title || "")}</p><p class="small mute" style="margin-top:10px">Usually under a minute; GSD listens to it, watches short clips and then looks up what was mentioned. You can close this.</p>`;
   const t = s => { const m = Math.floor(s / 60), x = String(s % 60).padStart(2, "0"); return `${m}:${x}` };
   return `${thumb(it, "thumb hero")}
     <div class="tiny">${KIND[it.kind] || ""} ${esc(it.kind)} · ${esc(it.source || "")}${it.author ? " · " + esc(it.author) : ""} · saved ${ago(it.created_at)}${it.resaved_count ? ` · saved ${it.resaved_count + 1} times` : ""}</div>
@@ -348,12 +368,25 @@ function itemSheet(it) {
     ${it.summary ? `<p style="margin-top:14px">${esc(it.summary)}</p>` : ""}
     ${it.takeaways?.length ? `<ul class="tk">${it.takeaways.map(k => `<li>${esc(k.text)}${k.t != null && it.source === "youtube" && u ? ` <a class="chip" style="padding:2px 8px" target="_blank" rel="noopener noreferrer" href="${esc(u + (u.includes("?") ? "&" : "?") + "t=" + k.t + "s")}">${t(k.t)}</a>` : ""}</li>`).join("")}</ul>` : ""}
     ${(it.quotes || []).map(q => `<blockquote>${esc(q)}</blockquote>`).join("")}
-    ${e.place?.name ? `<div class="card soft" style="margin-top:14px"><h3>📍 ${esc(e.place.name)}</h3><p class="small mute">${esc([e.place.category, e.place.address, e.place.city].filter(Boolean).join(" · "))}</p><a class="btn sm line" style="margin-top:10px" target="_blank" rel="noopener noreferrer" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([e.place.name, e.place.address, e.place.city].filter(Boolean).join(" "))}">Open in Maps</a></div>` : ""}
+    ${e.place?.name ? (() => { const q = encodeURIComponent([e.place.name, e.place.address, e.place.city].filter(Boolean).join(" ")), site = safeUrl(e.place.website) || safeUrl((it.resources || []).find(r => r.type === "place" && r.url)?.url);
+      return `<div class="card soft" style="margin-top:14px"><h3>📍 ${esc(e.place.name)}</h3><p class="small mute">${esc([e.place.category, e.place.address, e.place.city].filter(Boolean).join(" · "))}</p>
+      ${e.place.known_for ? `<p class="small" style="margin-top:6px">${esc(e.place.known_for)}</p>` : ""}
+      <div class="row" style="margin-top:10px">${it.source === "maps" && u ? `<a class="btn sm" target="_blank" rel="noopener noreferrer" href="${esc(u)}">Open the map ↗</a>` : `<a class="btn sm" target="_blank" rel="noopener noreferrer" href="https://www.google.com/maps/search/?api=1&query=${q}">Google Maps ↗</a>`}
+      <a class="btn sm line" target="_blank" rel="noopener noreferrer" href="https://maps.apple.com/?q=${q}">Apple Maps ↗</a>
+      ${site ? `<a class="btn sm line" target="_blank" rel="noopener noreferrer" href="${esc(site)}">Website ↗</a>` : ""}</div></div>` })() : ""}
     ${e.recipe?.ingredients?.length ? `<div class="card soft" style="margin-top:14px"><div class="row" style="justify-content:space-between"><h3>🍽️ Ingredients</h3><button class="chip" data-act="copy" data-id="${esc(e.recipe.ingredients.join("\n"))}">Copy list</button></div><ul class="tk small">${e.recipe.ingredients.map(x => `<li>${esc(x)}</li>`).join("")}</ul>${e.recipe.steps?.length ? `<h3 style="margin-top:12px">Steps</h3><ol class="small" style="padding-left:20px;margin:6px 0 0">${e.recipe.steps.map(x => `<li style="margin:4px 0">${esc(x)}</li>`).join("")}</ol>` : ""}</div>` : ""}
     ${e.book?.title ? `<div class="card soft" style="margin-top:14px"><h3>📖 ${esc(e.book.title)}</h3><p class="small mute">${esc(e.book.author || "")}</p></div>` : ""}
     ${e.tool?.name ? `<div class="card soft" style="margin-top:14px"><h3>🛠️ ${esc(e.tool.name)}</h3><p class="small mute">${esc(e.tool.what_for || "")}</p>${safeUrl(e.tool.url) ? `<a class="btn sm line" style="margin-top:10px" target="_blank" rel="noopener noreferrer" href="${esc(safeUrl(e.tool.url))}">Open</a>` : ""}</div>` : ""}
     ${e.workout?.exercises?.length ? `<div class="card soft" style="margin-top:14px"><h3>🏃 Workout</h3><ul class="tk small">${e.workout.exercises.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
     ${e.event?.name ? `<div class="card soft" style="margin-top:14px"><h3>🎟️ ${esc(e.event.name)}</h3><p class="small mute">${esc([e.event.date, e.event.place].filter(Boolean).join(" · "))}</p></div>` : ""}
+    ${(it.resources || []).length ? `<div class="sec"><div class="hd"><h2>Mentioned</h2>${it.enrich_state === "pending" ? `<span class="tiny"><span class="spin"></span> Finding the links…</span>` : ""}</div>
+      <div class="stack" style="gap:10px">${it.resources.map(r => { const ru = safeUrl(r.url);
+        return `<div class="card soft" style="padding:14px"><div class="act"><div class="em" aria-hidden="true">${RES[r.type] || "✨"}</div><div class="bd">
+          <h3>${esc(r.title)}</h3><div class="small mute">${esc([r.type, r.creator].filter(Boolean).join(" · "))}</div>
+          ${r.about ? `<p class="small" style="margin-top:6px">${esc(r.about)}</p>` : ""}${r.note ? `<p class="tiny" style="margin-top:4px">${esc(r.note)}</p>` : ""}
+          <div class="row" style="margin-top:10px">${ru ? `<a class="btn sm" target="_blank" rel="noopener noreferrer" href="${esc(ru)}">${RES_LABEL[r.type] || "Open it"} ↗</a>`
+            : it.enrich_state === "pending" ? "" : `<a class="btn sm line" target="_blank" rel="noopener noreferrer" href="https://www.google.com/search?q=${encodeURIComponent(r.search_hint || [r.title, r.creator].join(" "))}">Search for it ↗</a>`}</div>
+        </div></div></div>` }).join("")}</div></div>` : ""}
     <div class="sec"><div class="hd"><h2>Do something with it</h2><button class="small mute" data-act="ownact" data-id="${it.id}">+ Your own</button></div>
       <div class="stack">${acts.length ? acts.map(a => actRow(a)).join("") : `<p class="small mute">No actions yet.</p>`}</div>
       ${it.stage === "ready" ? `<form data-form="steer" data-id="${it.id}" class="row" style="margin-top:12px"><input class="field" id="steer" style="flex:1;min-width:160px" placeholder="Different ideas… (optional: “outdoors”, “shorter”)" aria-label="Steer new ideas"><button class="btn sm ghost" ${S.busy ? "disabled" : ""}>${S.busy ? '<span class="spin"></span>' : "Different ideas"}</button></form>` : ""}</div>
@@ -413,12 +446,12 @@ async function saveThing(body) {
 let pollT = null;
 function poll() {
   clearTimeout(pollT);
-  const waiting = S.items.filter(pending);
+  const waiting = S.items.filter(busy);
   if (!waiting.length || S.screen !== "app") return;
   pollT = setTimeout(async () => {
     if (!document.hidden) {
       let changed = false;
-      for (const it of waiting.slice(0, 6)) { const before = it.stage; const n = await api.refreshItem(it.id); if (!n || n.stage !== before) changed = true; if (n && n.stage === "ready" && before !== "ready") toast("Ready: " + (n.title || "").slice(0, 40)) }
+      for (const it of waiting.slice(0, 6)) { const before = it.stage, eb = it.enrich_state; const n = await api.refreshItem(it.id); if (!n || n.stage !== before || n.enrich_state !== eb) changed = true; if (n && n.stage === "ready" && before !== "ready") toast("Ready: " + (n.title || "").slice(0, 40)) }
       if (changed) refresh();
     }
     poll();
@@ -497,6 +530,7 @@ const H = {
   async addown(id) { const t = $("#oa").value.trim(); if (!t) return; await api.ins("actions", { item_id: id || null, title: t, mode: $("#om").value, status: "doing", origin: "user", minutes: S.profile.daily_minutes || 15, started_at: now() }); S.sheet = id ? { type: "item", id } : null; S.actTab = "doing"; refresh() },
   async interest(id) { const cur = S.profile.interests || []; await api.profile({ interests: cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id], onboarded_at: S.profile.onboarded_at || now() }); render() },
   async commit() { await api.profile({ commitment: S.profile.commitment === "action_first" ? "none" : "action_first" }); render() },
+  async watch() { await api.profile({ watch_video: S.profile.watch_video === false }); render() },
   async autorem() { await api.profile({ auto_remember: !S.profile.auto_remember }); render() },
   async capsetup() { S.newToken = ""; const { data } = await sb.from("capture_tokens").select("id,name,created_at,last_used_at").is("revoked_at", null).order("created_at", { ascending: false }); S.tokens = data || []; openSheet({ type: "capsetup" }) },
   async newtoken() {

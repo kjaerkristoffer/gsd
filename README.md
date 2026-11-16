@@ -21,6 +21,8 @@ Save what inspires you. Do something with it. Live more.
 - Sign-in is email + password (spec: emailed 6-digit code, which needs an email-template change).
 - The first account created is the owner; later sign-ups need a row in `allowed_emails`.
 - Ask returns the whole answer at once (spec: streamed).
+- Bigger models than the spec: `gpt-6.1-sol` reads each save, `gpt-6.1-terra` with web search finds the real links. Roughly $0.05-0.10 per save; the You tab shows the month's estimate against a $5 guide.
+- Short clips are also watched (Supadata extract) so on-screen text is read; toggle in You.
 - Not built yet: push notifications, offline outbox, service worker, weekly review, collections, export/delete account.
 
 ## After deploying
