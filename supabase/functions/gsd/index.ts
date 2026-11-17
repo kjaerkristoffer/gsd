@@ -216,12 +216,12 @@ const KINDS = ["video", "film", "show", "article", "place", "recipe", "book", "q
 const RTYPES = ["article", "book", "paper", "film", "show", "podcast", "video", "tool", "repo", "course", "product", "place", "person", "music", "other"];
 const ACTION = obj({ title: S, why: S, minutes: I, first_step: S, steps: arr(S),
   mode: { type: "string", enum: MODES }, effort: { type: "string", enum: ["tiny", "real"] }, context: { type: "string", enum: ["anywhere", "home", "computer", "out"] } });
-const understandSchema = (areas: string[]) => obj({
+const understandSchema = (folders: string[]) => obj({
   title: S,
   kind: { type: "string", enum: KINDS },
   language: S, summary: S, insight: S,
   takeaways: arr(obj({ text: S, t: NI })), quotes: arr(S),
-  area: { type: "string", enum: [...new Set([...areas, "Other"])] }, tags: arr(S),
+  folder: { type: "string", enum: folders.length ? folders : ["Unsorted"] }, tags: arr(S),
   entities: obj({
     place: opt({ name: S, category: S, address: S, city: S, country: S, known_for: S, website: S }),
     recipe: opt({ servings: NI, time_minutes: NI, ingredients: arr(S), steps: arr(S) }),
@@ -254,7 +254,7 @@ Fields:
 - insight: the single most interesting or useful idea, one sentence, at most 160 characters. It must make sense on its own.
 - takeaways: 3-6 concrete points, each useful on its own: the specific advice, step, number or name. Do not use takeaways to list the resources; those go in resources. When the content has [mm:ss] markers, set t to the second where the point is made; otherwise null.
 - quotes: 0-2 short memorable lines taken word for word from the content, each under 15 words. Empty if none stand out.
-- area: choose the best fit from the allowed list.
+- folder: the Library folder it belongs in. Pick the closest fit from FOLDERS, using what each one holds; judge by what the person would do with it (a reel about a restaurant goes with restaurants, a dish with recipes).
 - tags: 1-3 short lowercase tags. Reuse a tag from EXISTING TAGS whenever one fits.
 - entities: fill only the object that matches kind (film and show both use film); all others null. Use only facts present in the content. Unknown sub-fields are empty strings, empty arrays or null. For a place, known_for is one line on what to go there for, and website is its own site if the content gives one. For a film or show, where_to_watch is the streaming service only if the content names it.
 - resources: every specific thing the content recommends or tells people to get, read, watch, use or visit: articles, essays, books, papers, films, shows, podcasts, videos, tools, apps, GitHub repositories, courses, products, places, people to follow. One entry each, up to 8, in the order mentioned.
@@ -303,9 +303,10 @@ async function person(userId: string) {
   const count = new Map<string, number>();
   for (const r of tagRows ?? []) for (const t of r.tags) count.set(t, (count.get(t) ?? 0) + 1);
   const tags = [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60).map((e) => e[0]);
-  const areas: string[] = p?.areas?.length ? p.areas : ["Other"];
-  const text = `PERSON\nAreas they care about most: ${(p?.interests ?? []).join(", ") || "not set"}\nGoals: ${p?.goals || "not set"}\nUsually has: ${p?.daily_minutes ?? 15} minutes\nCity: ${p?.city || "unknown"}\nCountry: ${p?.country || "unknown"}\nLanguage: ${p?.language || "match the content"}\nSTANDING PREFERENCES: ${p?.preferences || "none"}\nTASTE: ${p?.taste || "no history yet"}\nEXISTING TAGS: ${tags.join(", ") || "none"}\nToday: ${today()}`;
-  return { p, areas, text };
+  const { data: fs } = await admin.from("folders").select("id,name,about").eq("user_id", userId).order("pos");
+  const folders: { id: string; name: string; about: string }[] = fs ?? [];
+  const text = `PERSON\nFOLDERS: ${folders.map((f) => f.about ? `${f.name} (${f.about})` : f.name).join("; ") || "none"}\nFolders they care about most: ${(p?.interests ?? []).join(", ") || "not set"}\nGoals: ${p?.goals || "not set"}\nUsually has: ${p?.daily_minutes ?? 15} minutes\nCity: ${p?.city || "unknown"}\nCountry: ${p?.country || "unknown"}\nLanguage: ${p?.language || "match the content"}\nSTANDING PREFERENCES: ${p?.preferences || "none"}\nTASTE: ${p?.taste || "no history yet"}\nEXISTING TAGS: ${tags.join(", ") || "none"}\nToday: ${today()}`;
+  return { p, folders, text };
 }
 const cleanAction = (a: any) => ({
   title: String(a.title ?? "").slice(0, 160), why: String(a.why ?? "").slice(0, 300),
@@ -343,12 +344,21 @@ async function placeLane(userId: string, id: string, want: "now" | "next" | "") 
   if (!error) return { lane: "next", message: want === "now" ? "Now is full, so it's first in Up next." : "Saved to Up next." };
   return { lane: "library", message: "Now and Up next are full, so it's in your Library." };
 }
+// A folder named when saving (its id, or its name from a Shortcut menu). Unknown names are ignored, so the AI picks.
+async function folderOf(userId: string, v: unknown): Promise<string | null> {
+  const t = String(v ?? "").trim();
+  if (!t || /^(auto|let gsd pick)$/i.test(t)) return null;
+  const { data } = await admin.from("folders").select("id,name").eq("user_id", userId);
+  return (data ?? []).find((f: any) => f.id === t || f.name.toLowerCase() === t.toLowerCase())?.id ?? null;
+}
 async function capture(req: Request, user: { id: string }) {
   const b = await req.json().catch(() => ({}));
   const via = ["app", "shortcut", "share_target", "bookmarklet", "api"].includes(b.via) ? b.via : "api";
   const want = laneOf(b);
   if (typeof b.text === "string") b.text = stripLaneTag(b.text);
   const note = stripLaneTag(String(b.note ?? "")).slice(0, 500);
+  const folderId = await folderOf(user.id, b.folder);
+  const pinned = folderId ? { folder_id: folderId, area_locked: true } : {};
   const done = async (id: string, duplicate: boolean, title?: string, inLane?: string | null) => {
     const placed = inLane ? { lane: inLane, message: `Already in ${inLane === "now" ? "Now" : "Up next"}.` } : await placeLane(user.id, id, want);
     return json(req, { item_id: id, duplicate, ...(title ? { title } : {}), ...placed, message: duplicate && !want ? "You saved this before. Moved it to the top." : placed.message });
@@ -365,7 +375,7 @@ async function capture(req: Request, user: { id: string }) {
       const up = await admin.storage.from("captures").upload(path, bytes, { contentType: "image/jpeg" });
       if (up.error) return json(req, { error: "upload_failed" }, 500);
     } else if (!path.startsWith(user.id + "/")) return json(req, { error: "invalid_image" }, 400);
-    const { data, error } = await admin.from("items").insert({ user_id: user.id, source: "image", kind: "other", via, note, image_path: path, title: "Image" }).select("id").single();
+    const { data, error } = await admin.from("items").insert({ user_id: user.id, source: "image", kind: "other", via, note, image_path: path, title: "Image", ...pinned }).select("id").single();
     if (error) return json(req, { error: "db", message: error.message }, 500);
     return done(data.id, false);
   }
@@ -374,7 +384,7 @@ async function capture(req: Request, user: { id: string }) {
   if (!text) return json(req, { error: "empty" }, 400);
   const link = text.match(/https?:\/\/[^\s<>"']+/i)?.[0];
   if (!link) {
-    const { data, error } = await admin.from("items").insert({ user_id: user.id, source: "note", kind: "note", via, note, content_text: text.slice(0, 20000), title: text.slice(0, 80) }).select("id").single();
+    const { data, error } = await admin.from("items").insert({ user_id: user.id, source: "note", kind: "note", via, note, content_text: text.slice(0, 20000), title: text.slice(0, 80), ...pinned }).select("id").single();
     if (error) return json(req, { error: "db", message: error.message }, 500);
     return done(data.id, false);
   }
@@ -385,11 +395,11 @@ async function capture(req: Request, user: { id: string }) {
     await admin.from("items").update({
       resaved_count: ex.resaved_count + 1, last_saved_at: new Date().toISOString(),
       note: note && !ex.note.includes(note) ? [ex.note, note].filter(Boolean).join("\n") : ex.note,
-      ...(ex.status === "let_go" ? { status: "inbox", let_go_at: null } : {}),
+      ...(ex.status === "let_go" ? { status: "inbox", let_go_at: null } : {}), ...pinned,
     }).eq("id", ex.id);
     return done(ex.id, true, ex.title, ex.lane);
   }
-  const { data, error } = await admin.from("items").insert({ user_id: user.id, url: link, canonical_url: c.url, source: c.source, start_seconds: c.start, via, note, title: String(b.title ?? "").slice(0, 200) || (c.source === "maps" ? "Place" : c.url) }).select("id").single();
+  const { data, error } = await admin.from("items").insert({ user_id: user.id, url: link, canonical_url: c.url, source: c.source, start_seconds: c.start, via, note, title: String(b.title ?? "").slice(0, 200) || (c.source === "maps" ? "Place" : c.url), ...pinned }).select("id").single();
   if (error) return json(req, { error: "db", message: error.message }, 500);
   return done(data.id, false);
 }
@@ -591,7 +601,7 @@ async function toDataUrl(url: string) {
 
 // ---------- pass 1: read and understand ----------
 async function processItem(item: any, diag: string[]): Promise<void> {
-  const { p: profile, areas, text: personText } = await person(item.user_id);
+  const { p: profile, folders, text: personText } = await person(item.user_id);
   let src = blank(); src.quality = "full";
   const parts: any[] = [];
 
@@ -664,7 +674,7 @@ async function processItem(item: any, diag: string[]): Promise<void> {
 
   parts.unshift({ type: "input_text", text: `${personText}\n\nSAVE\nURL: ${item.canonical_url ?? "(none)"}\nSource: ${item.source}\nTheir note: ${item.note || "(none)"}\n\n<content>\n${content || "(no readable text; look at the image if there is one, otherwise work from the URL only)"}\n</content>` });
   const model = parts.length > 1 ? M_VISION : M_UNDERSTAND;
-  const format = { type: "json_schema", name: "save", strict: true, schema: understandSchema(areas) };
+  const format = { type: "json_schema", name: "save", strict: true, schema: understandSchema(folders.map((f) => f.name)) };
   let out: any;
   try { out = JSON.parse(await respond("understand", item.user_id, model, UNDERSTAND, parts, { format, effort: "medium", max: 14000 })); }
   catch (e) { if (e instanceof Fail) throw e; throw new Fail("ai_error", "model output was not valid JSON", true); }
@@ -682,7 +692,8 @@ async function processItem(item: any, diag: string[]): Promise<void> {
     entities: out.entities ?? {}, quality, error_code: null, resources, enrich_state: resources.length ? "pending" : "none",
   };
   if (!item.title_edited) upd.title = String(out.title || src.title || item.title || "Untitled").slice(0, 200);
-  if (!item.area_locked) upd.area = areas.includes(out.area) ? out.area : "Other";
+  // The folder: the AI's pick, unless the person chose one themselves.
+  if (!item.area_locked) upd.folder_id = folders.find((f) => f.name === out.folder)?.id ?? item.folder_id ?? null;
   upd.tags = [...new Set([...(item.tags ?? []), ...tags])].slice(0, 8);
   await stage(item.id, upd);
 

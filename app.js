@@ -24,6 +24,33 @@ const SHELF = Object.fromEntries([
   ["wisdom", "💎", "Wisdom", [], "", ""],
 ].map(([key, em, name, kinds, todo, done], order) => [key, { key, em, name, kinds, todo, done, order }]));
 const shelfOf = it => it.area === "Wisdom" && it.source === "note" ? SHELF.wisdom : Object.values(SHELF).find(s => s.kinds.includes(it.kind)) || SHELF.ideas;
+// Library folders: the person's own set, in their order (folders table). A save sits in one; without one it is Unsorted.
+// Each folder names its two filters, e.g. Recipes: "To cook" / "Tried & tested".
+const UNSORTED = { id: "none", emoji: "🗂️", name: "Unsorted", todo_label: "To do", done_label: "Done", about: "" };
+const fById = id => id === "none" ? UNSORTED : S.folders.find(f => f.id === id) || null;
+const folderOf = it => S.folders.find(f => f.id === it.folder_id) || UNSORTED;
+const inFolder = (f, l = live()) => l.filter(i => folderOf(i).id === f.id);
+const fLabel = f => `${f.emoji} ${f.name}`;
+const RANK = { loved: 3, good: 2, meh: 1 };
+const byRating = (a, b) => (RANK[b.rating] || 0) - (RANK[a.rating] || 0) || (b.done_count || 0) - (a.done_count || 0) || new Date(b.done_at) - new Date(a.done_at);
+// A new folder's emoji and filters, guessed from its name. All editable.
+const FGUESS = [
+  [/film|movie|series|\bshows?\b|\btv\b|watch|documentar|cinema/i, "🎬", "To watch", "Watched"],
+  [/recipe|cook|food|bak|dinner|lunch|meal|dessert|drink|cocktail/i, "🍳", "To cook", "Tried & tested"],
+  [/restaurant|caf[eé]|\bbars?\b|\beat|brunch|coffee|wine/i, "🍜", "To try", "Been there"],
+  [/book|read|novel|article/i, "📚", "To read", "Read"],
+  [/travel|trip|holiday|vacation|hotel|destination|place|city|cities|countr/i, "✈️", "To go", "Been there"],
+  [/music|song|album|playlist|podcast|listen/i, "🎧", "To listen", "Listened"],
+  [/game/i, "🎮", "To play", "Played"],
+  [/fashion|cloth|style|outfit|shoe|wardrobe|shop|gift|wish/i, "🛍️", "Wishlist", "Got it"],
+  [/golf|tennis|padel|football|ski|surf|climb/i, "🏅", "To practice", "Practiced"],
+  [/workout|gym|fitness|\brun|train|yoga|sport|health|mobility/i, "🏋️", "To do", "Done"],
+  [/\bai\b|tech|tool|\bapps?\b|code|coding|software|startup/i, "🤖", "To try", "Tried"],
+  [/art|draw|paint|design|craft|photo|creative|diy/i, "🎨", "To make", "Made"],
+  [/learn|course|study|language|skill/i, "🎓", "To learn", "Learned"],
+  [/home|house|garden|interior|furniture|clean/i, "🏠", "To do", "Done"],
+];
+const guessFolder = name => { const g = FGUESS.find(([re]) => re.test(name)); return g ? { emoji: g[1], todo_label: g[2], done_label: g[3] } : { emoji: "📁", todo_label: "To do", done_label: "Done" } };
 const VERB = { recipe: "Cooked", film: "Watched", show: "Watched", video: "Watched", place: "Been there", event: "Went", book: "Read", article: "Read", workout: "Done", tool: "Tried", product: "Tried", music: "Played" };
 const MARK = { recipe: "I cooked it", film: "I watched it", show: "I watched it", video: "I watched it", place: "I went", event: "I went", book: "I read it", article: "I read it", music: "I played it", tool: "I tried it", product: "I tried it" };
 const doneVerb = it => VERB[it.kind] || "Done";
@@ -39,7 +66,7 @@ const RES_LABEL = { article: "Read it", paper: "Read the paper", book: "See the 
 const PRICE = { "gpt-6-luna": [.1, .5], "gpt-6.1-terra": [1, 5], "gpt-6.1-sol": [2, 10], "gpt-6-astra": [10, 50], "text-embedding-3-small": [.02, 0] };
 const BUDGET = 5;
 const LADDER = [1, 3, 7, 14, 30, 60, 120];
-const ITEM_COLS = "id,url,canonical_url,source,kind,title,author,thumb_path,start_seconds,summary,insight,takeaways,quotes,entities,area,tags,note,status,stage,error_code,quality,resaved_count,remember,last_surfaced_at,opened_count,created_at,diag,resources,enrich_state,lane,slot,lane_at,next_pos,plan_action_id,done_at,done_count,rating,done_note";
+const ITEM_COLS = "id,url,canonical_url,source,kind,title,author,thumb_path,start_seconds,summary,insight,takeaways,quotes,entities,area,tags,note,status,stage,error_code,quality,resaved_count,remember,last_surfaced_at,opened_count,created_at,diag,resources,enrich_state,lane,slot,lane_at,next_pos,plan_action_id,done_at,done_count,rating,done_note,folder_id,area_locked";
 const ERR = {
   private_or_missing: "This post is private or was removed. GSD can only read public links.",
   unreadable: "GSD couldn't read this page. You can still add your own note.",
@@ -71,7 +98,7 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { ap
 
 /* ---------- state ---------- */
 const S = { screen: "boot", user: null, profile: null, items: [], actions: [], cards: [], log: [], passes: [], gates: [], tokens: [],
-  tab: "now", sheet: null, q: "", area: "", shelf: "", shelfTab: "todo", lib: "shelves", folder: "", mode: "inspire", seen: new Set(), ask: null,
+  tab: "now", sheet: null, q: "", fid: "", shelfTab: "todo", lib: "folders", folder: "", folders: [], mode: "inspire", seen: new Set(), ask: null,
   authMode: "in", authMsg: "", busy: false, related: {}, more: false, newToken: "" };
 let sb = null, confirmDel = null;
 
@@ -80,15 +107,16 @@ const must = r => { if (r.error) throw r.error; return r.data };
 const api = {
   async load() {
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
-    const [p, i, a, c, u] = await Promise.all([
+    const [p, i, a, c, u, f] = await Promise.all([
       sb.from("profiles").select("*").eq("user_id", S.user.id).maybeSingle(),
       sb.from("items").select(ITEM_COLS).order("created_at", { ascending: false }).limit(1000),
       sb.from("actions").select("*").order("created_at", { ascending: false }).limit(3000),
       sb.from("recall_cards").select("id,item_id,q,a,active,step,due").limit(5000),
       sb.from("ai_calls").select("job,model,in_tokens,out_tokens,searches").gte("created_at", monthStart).limit(5000),
+      sb.from("folders").select("*").order("pos").order("created_at"),
       api.loadFocus(),
     ]);
-    S.profile = must(p); S.items = must(i); S.actions = must(a); S.cards = must(c); S.usage = u.data || [];
+    S.profile = must(p); S.items = must(i); S.actions = must(a); S.cards = must(c); S.usage = u.data || []; S.folders = must(f);
   },
   // Now's history, the scroll passes and the gate's pauses: what the gauge and the stats are made of.
   async loadFocus() {
@@ -131,6 +159,18 @@ const api = {
     if (a.data) S.actions = [...a.data, ...S.actions.filter(x => x.item_id !== id)];
     if (c.data) S.cards = [...c.data, ...S.cards.filter(x => x.item_id !== id)];
     return i.data;
+  },
+  // A new folder. Its filters and emoji are guessed from the name; a leading emoji in the name is used as its emoji.
+  async addFolder(raw) {
+    let name = String(raw || "").replace(/\s+/g, " ").trim(), emoji = "";
+    const m = name.match(/^(\p{Extended_Pictographic}[\u{FE0F}\u{200D}\u{1F3FB}-\u{1F3FF}\p{Extended_Pictographic}]*)\s*(.*)$/u);
+    if (m && m[2]) { emoji = m[1]; name = m[2] }
+    name = name.slice(0, 40); if (!name) return null;
+    const ex = S.folders.find(f => f.name.toLowerCase() === name.toLowerCase()); if (ex) return ex;
+    const g = guessFolder(name), row = { name, ...g, ...(emoji ? { emoji } : {}), pos: Math.max(0, ...S.folders.map(f => f.pos)) + 1 };
+    const { data, error } = await sb.from("folders").insert(row).select().single();
+    if (error) { console.error(error); toast("Couldn't add the folder"); return null }
+    S.folders.push(data); return data;
   },
   async refreshActs(id) { const { data } = await sb.from("actions").select("*").eq("item_id", id); if (data) S.actions = [...data, ...S.actions.filter(x => x.item_id !== id)] },
   // Move a save or a single action between Now, Up next and the library.
@@ -209,7 +249,7 @@ function fitScore(it) {
   const p = S.profile, mins = p.daily_minutes || 15, pl = planOf(it), dow = new Date().getDay(), weekend = dow === 0 || dow === 6, sh = shelfOf(it).key, age = (Date.now() - new Date(it.created_at)) / 864e5;
   let s = 0;
   if (pl) { s += 10; if (pl.minutes <= 2 * mins) s += 10 }
-  if ((p.interests || []).includes(it.area)) s += 15;
+  if ((p.interests || []).includes(folderOf(it).name)) s += 15;
   if (age <= 7) s += 12; else if (age > 30) s += 8;
   if (it.resaved_count > 0) s += 8;
   if (it.note) s += 10;
@@ -227,7 +267,7 @@ const badge = it => { const n = S.actions.filter(a => a.item_id === it.id && a.l
 // A thumbnail for a save, or for a single action (its save's picture, with what it is in the corner).
 const thumbX = (x, cls) => { if (!isAct(x)) return thumb(x, cls); const it = item(x.item_id), u = it ? thumbUrl(it) : "";
   return `<div class="${cls}">${actEm(x)}${u ? `<img src="${esc(u)}" alt="" loading="lazy" onerror="this.remove()"><span class="th-em" aria-hidden="true">${actEm(x)}</span>` : ""}</div>` };
-const tile = it => { const sh = shelfOf(it); return `<button class="tile" data-act="open" data-id="${it.id}">${thumb(it, "thumb", badge(it))}<div class="tx"><div class="t">${pending(it) ? '<span class="spin"></span> Reading…' : esc(it.title || it.url || "Untitled")}</div><div class="tiny">${sh.em} ${esc(sh.name)} · ${ago(it.created_at)}</div></div></button>` };
+const tile = it => { const f = folderOf(it); return `<button class="tile" data-act="open" data-id="${it.id}">${thumb(it, "thumb", badge(it))}<div class="tx"><div class="t">${pending(it) ? '<span class="spin"></span> Reading…' : esc(it.title || it.url || "Untitled")}</div><div class="tiny">${f.emoji} ${esc(f.name)} · ${ago(it.created_at)}</div></div></button>` };
 // One idea inside its save. The plan is the one that counts: finishing the save finishes it.
 function actRow(a, it) {
   const m = MODE[a.mode] || MODE.grow, isPlan = planOf(it)?.id === a.id, link = safeUrl(a.link), saveNow = it.lane === "now";
@@ -412,19 +452,16 @@ const GF_BACK = "M0 56A22 22 0 0 1 22 34L146 34C170 34 172 0 198 0L318 0A22 22 0
 const GF_FRONT = "M0 22A22 22 0 0 1 22 0L118 0C144 0 146 32 172 32L318 32A22 22 0 0 1 340 54L340 176A22 22 0 0 1 318 198L22 198A22 22 0 0 1 0 176Z";
 const gfSlot = (i, n) => n <= 1 ? 0 : (i / (n - 1)) * 2 - 1;
 const gfSeen = new Set(); // folders that have already assembled themselves once this session
-// Folders by shelf (what you'd do with it) or by area (what it's about).
+// The glass folders: yours in your order, then Unsorted when anything is in it.
 function gfFolders() {
-  const by = S.lib === "areas" ? "area" : "shelf", m = new Map();
-  for (const it of live()) { const k = by === "area" ? it.area || "Unsorted" : shelfOf(it).key; if (!m.has(k)) m.set(k, []); m.get(k).push(it) }
+  const l = live(), list = [...S.folders, UNSORTED].map(f => ({ f, items: inFolder(f, l) })).filter(x => x.f.id !== "none" || x.items.length);
   const used = {}, art = {};
-  for (const k of [...m.keys()].sort()) { const s = Math.floor(hash("gf:" + k) * GF_PRESETS.length);
+  for (const k of list.map(x => x.f.id).sort()) { const s = Math.floor(hash("gf:" + k) * GF_PRESETS.length);
     const p = [...GF_PRESETS.keys()].map(d => GF_PRESETS[(s + d) % GF_PRESETS.length]).reduce((b, p) => (used[p] || 0) < (used[b] || 0) ? p : b); used[p] = (used[p] || 0) + 1; art[k] = p }
-  const last = k => k === "wisdom" || k === "Wisdom";
-  return [...m.entries()].map(([key, items]) => { const sh = by === "shelf" ? SHELF[key] : null, done = items.filter(i => key === "cook" ? tested(i) : i.done_at).length;
-    return { key, art: art[key], name: sh ? sh.name : key, label: sh ? `${sh.em} ${sh.name}` : `${key === "Wisdom" ? "💎 " : ""}${key}`,
-      meta: `${items.length} save${items.length === 1 ? "" : "s"}${sh?.done && done ? ` · ${done} ${key === "cook" ? "tested" : "done"}` : ""}`,
-      items: items.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)) } })
-    .sort((a, b) => last(a.key) - last(b.key) || b.items.length - a.items.length || a.name.localeCompare(b.name));
+  return list.map(({ f, items }) => { const done = items.filter(i => i.done_at).length;
+    return { key: f.id, art: art[f.id], name: f.name, label: fLabel(f),
+      meta: items.length ? `${items.length} save${items.length === 1 ? "" : "s"}${done ? ` · ${done} done` : ""}` : "Empty",
+      items: items.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)) } });
 }
 function gfSheet(it, v, n) {
   const r = gfRng(gfSeed(it.id)), src = thumbUrl(it), name = pending(it) ? "Reading…" : it.title || hostOf(it.url) || "Untitled";
@@ -486,31 +523,32 @@ document.addEventListener("pointerdown", e => { if (S.folder && !e.target.closes
 document.addEventListener("keydown", e => { if (e.key === "Escape" && S.folder && !S.sheet) { const k = S.folder; gfSet(""); [...document.querySelectorAll(".gf")].find(el => el.dataset.key === k)?.querySelector(".gf-hit").focus() } });
 
 function libList() {
-  const q = S.q.toLowerCase().trim();
-  if ((S.lib === "shelves" || S.lib === "areas") && !S.area && !S.shelf && !q) { const fs = gfFolders();
-    return fs.length ? `<div class="folders">${fs.map(gfFolder).join("")}</div>` : `<div class="card soft"><p class="mute">Nothing saved yet. Tap + and paste a link from Instagram, YouTube, TikTok or anywhere. Saves sort themselves onto shelves here: Watch, Cook, Go, Read…</p></div>` }
+  const q = S.q.toLowerCase().trim(), f = S.fid && fById(S.fid);
+  if (S.lib === "folders" && !f && !q) { const fs = gfFolders();
+    return fs.length ? `<div class="folders">${fs.map(gfFolder).join("")}</div>` : `<div class="card soft"><p class="mute">No folders yet. Tap ✏️ Folders to add your first one.</p></div>` }
   let l = S.lib === "inbox" ? S.items.filter(i => i.status === "inbox" && !i.lane) : S.lib === "let_go" ? S.items.filter(i => i.status === "let_go")
     : S.lib === "done" ? live().filter(i => i.done_at).sort((a, b) => new Date(b.done_at) - new Date(a.done_at)) : live();
-  if (S.area) l = l.filter(i => i.area === S.area);
-  if (S.shelf) {
-    const sh = SHELF[S.shelf]; l = l.filter(i => shelfOf(i).key === S.shelf);
-    if (sh.done && S.shelfTab === "todo") l = l.filter(i => !i.done_at);
-    if (sh.done && S.shelfTab === "done") l = l.filter(i => S.shelf === "cook" ? tested(i) : i.done_at).sort((a, b) => (b.rating === "loved") - (a.rating === "loved") || b.done_count - a.done_count || new Date(b.done_at) - new Date(a.done_at));
+  if (f) {
+    l = inFolder(f, l);
+    if (S.shelfTab === "todo") l = l.filter(i => !i.done_at);
+    if (S.shelfTab === "done") l = l.filter(i => i.done_at).sort(byRating);
   }
-  if (q) l = l.filter(i => [i.title, i.summary, i.note, i.done_note, i.source, i.area, i.kind, shelfOf(i).name, ...(i.tags || []), ...(i.takeaways || []).map(t => t.text), ...(i.resources || []).map(r => r.title)].join(" ").toLowerCase().includes(q));
-  const empty = S.shelf && S.shelfTab === "done" ? (S.shelf === "cook" ? "Recipes you cook and rate 😍 or 👍 collect here. Your tried & tested ones." : `Nothing ${SHELF[S.shelf].done.toLowerCase()} yet.`) : q ? "Nothing matches. Try Ask for questions in your own words." : "Nothing here.";
+  if (q) l = l.filter(i => [i.title, i.summary, i.note, i.done_note, i.source, i.kind, folderOf(i).name, ...(i.tags || []), ...(i.takeaways || []).map(t => t.text), ...(i.resources || []).map(r => r.title)].join(" ").toLowerCase().includes(q));
+  const empty = q ? "Nothing matches. Try Ask for questions in your own words."
+    : f && S.shelfTab === "done" ? `Nothing in ${esc(f.done_label)} yet. Finish something from ${esc(f.name)} and rate it, and it lands here, best first.`
+    : f && !inFolder(f).length ? "Nothing here yet. New saves that fit land here on their own, and you can move any save here from its page."
+    : f && S.shelfTab === "todo" ? `Nothing open in ${esc(f.name)}. 🎉` : "Nothing here.";
   return l.length ? `<div class="grid">${l.map(tile).join("")}</div>` : `<p class="mute" style="padding:30px 0;text-align:center">${empty}</p>`;
 }
 function vLibrary() {
-  const sh = S.shelf && SHELF[S.shelf], inShelf = sh ? live().filter(i => shelfOf(i).key === sh.key) : [], nArea = S.area ? live().filter(i => i.area === S.area).length : 0;
-  const nDone = sh ? inShelf.filter(i => sh.key === "cook" ? tested(i) : i.done_at).length : 0, nTodo = inShelf.filter(i => !i.done_at).length;
-  return `<h1>Library</h1>
+  const f = S.fid && fById(S.fid), all = f ? inFolder(f) : [], nDone = all.filter(i => i.done_at).length, nTodo = all.length - nDone;
+  return `<div class="lib-hd"><h1>Library</h1><button class="chip" data-act="folders">✏️ Folders</button></div>
   <div class="sec"><input class="field search" id="q" type="search" placeholder="Search your saves" value="${esc(S.q)}" aria-label="Search your saves"></div>
-  <div class="scroll" style="margin-top:12px">${[["shelves", "🗂️ Shelves"], ["areas", "🏷️ Areas"], ["all", "All"], ["done", "✓ Done"], ["inbox", "Unsorted"], ["let_go", "Let go"]].map(([k, t]) => `<button class="chip ${S.lib === k && !S.area && !S.shelf ? "on" : ""}" data-act="lib" data-id="${k}">${t}</button>`).join("")}</div>
-  ${sh ? `<div class="crumb sec"><button class="chip" data-act="lib" data-id="shelves" aria-label="Back to shelves">←</button><h2>${sh.em} ${esc(sh.name)}</h2><span class="small mute">${inShelf.length} save${inShelf.length === 1 ? "" : "s"}</span></div>
-    ${sh.done ? `<div class="scroll" style="margin-top:12px">${[["todo", `${sh.todo} (${nTodo})`], ["done", `${sh.key === "cook" ? "⭐" : "✓"} ${sh.done} (${nDone})`], ["all", "All"]].map(([k, t]) => `<button class="chip ${S.shelfTab === k ? "on" : ""}" data-act="shtab" data-id="${k}">${t}</button>`).join("")}</div>` : ""}` : ""}
-  ${S.area ? `<div class="crumb sec"><button class="chip" data-act="lib" data-id="areas" aria-label="Back to areas">←</button><h2>${S.area === "Wisdom" ? "💎 " : ""}${esc(S.area)}</h2><span class="small mute">${nArea} save${nArea === 1 ? "" : "s"}</span></div>` : ""}
-  <div class="${S.area || sh ? "" : "sec"}" id="libgrid" style="${S.area || sh ? "margin-top:14px" : ""}">${libList()}</div>`;
+  <div class="scroll" style="margin-top:12px">${[["folders", "📁 Folders"], ["all", "All"], ["done", "✓ Done"], ["inbox", "📥 Inbox"], ["let_go", "Let go"]].map(([k, t]) => `<button class="chip ${S.lib === k && !f ? "on" : ""}" data-act="lib" data-id="${k}">${t}</button>`).join("")}</div>
+  ${f ? `<div class="crumb sec"><button class="chip" data-act="lib" data-id="folders" aria-label="Back to folders">←</button><h2>${esc(fLabel(f))}</h2><span class="small mute">${all.length} save${all.length === 1 ? "" : "s"}</span>${f.id !== "none" ? `<button class="chip" data-act="fedit" data-id="${f.id}" aria-label="Edit ${esc(f.name)}" title="Edit folder">✏️</button>` : ""}</div>
+    <div class="scroll" style="margin-top:12px" role="tablist" aria-label="Filter ${esc(f.name)}">${[["todo", `${esc(f.todo_label)} (${nTodo})`], ["done", `${/tested/i.test(f.done_label) ? "⭐" : "✓"} ${esc(f.done_label)} (${nDone})`], ["all", `All (${all.length})`]].map(([k, t]) => `<button role="tab" aria-selected="${S.shelfTab === k}" class="chip ${S.shelfTab === k ? "on" : ""}" data-act="shtab" data-id="${k}">${t}</button>`).join("")}</div>
+    ${f.about ? `<p class="tiny" style="margin-top:8px">${esc(f.about)}</p>` : ""}` : ""}
+  <div class="${f ? "" : "sec"}" id="libgrid" style="${f ? "margin-top:14px" : ""}">${libList()}</div>`;
 }
 function feed() {
   const ready = live().filter(i => i.stage === "ready" && !i.lane);
@@ -579,7 +617,7 @@ function vProfile() {
       <button class="chip ${timer ? "on" : ""}" data-act="passtimer">${timer ? "✓ " : ""}Ring when a pass ends (this phone)</button></div>
     <p class="tiny" style="margin-top:8px">The gate needs a one-time iPhone automation: <button class="tiny" style="text-decoration:underline" data-act="capsetup">set it up</button>. “Open anyway” always works, and counts as a slip.</p></div>
   <div class="sec"><div class="hd"><h2>What you care about</h2></div>
-    <div class="chips">${(p.areas || []).map(a => `<button class="chip ${p.interests?.includes(a) ? "on" : ""}" data-act="interest" data-id="${esc(a)}">${esc(a)}</button>`).join("")}</div>
+    <div class="chips">${S.folders.map(f => `<button class="chip ${p.interests?.includes(f.name) ? "on" : ""}" data-act="interest" data-id="${esc(f.name)}">${esc(fLabel(f))}</button>`).join("")}</div>
     <label class="l" for="goals">The life you're building, in a sentence or two</label>
     <textarea class="field" id="goals" data-save="goals" placeholder="e.g. Build small AI apps, draw more, try one new place a month">${esc(p.goals)}</textarea>
     <label class="l" for="mins">Time you usually have for one thing</label>
@@ -623,9 +661,10 @@ function sheetHtml() {
     b = `<h2>Save <em>anything</em></h2><p class="small mute" style="margin-top:4px">Paste a link, or write a note, an idea or something to do.</p>
     <label class="l" for="sv">Link or text</label><textarea class="field" id="sv" placeholder="https://www.instagram.com/reel/…">${esc(s.val || "")}</textarea>
     <label class="l" for="sn">Why are you saving it? (optional)</label><input class="field" id="sn" placeholder="e.g. try this at the weekend" value="${esc(s.note || "")}">
+    <label class="l" for="sf">Folder</label><select class="field" id="sf"><option value="">✨ Let GSD pick</option>${S.folders.map(f => `<option value="${f.id}" ${s.folder === f.id ? "selected" : ""}>${esc(fLabel(f))}</option>`).join("")}</select>
     <label class="l">Where does it go?</label>
     <div class="seg" role="radiogroup" aria-label="Where it goes">${[["now", `⚡ Now${free ? ` · ${free} free` : " · full"}`], ["next", "⏭ Up next"], ["library", "📚 Library"]].map(([k, n]) => `<button role="radio" aria-checked="${lane === k}" class="${lane === k ? "on" : ""}" data-act="savelane" data-id="${k}">${n}</button>`).join("")}</div>
-    <p class="tiny" style="margin-top:8px">${lane === "now" ? (free ? "It becomes one of your three. Finishing it earns a scroll pass." : "Now is full, so it goes first in Up next. Swap it in when a slot frees up.") : lane === "next" ? "It waits in line for a free slot." : "It goes on a shelf. Pull it into Now whenever you're ready."}</p>
+    <p class="tiny" style="margin-top:8px">${lane === "now" ? (free ? "It becomes one of your three. Finishing it earns a scroll pass." : "Now is full, so it goes first in Up next. Swap it in when a slot frees up.") : lane === "next" ? "It waits in line for a free slot." : "It goes in its folder. Pull it into Now whenever you're ready."}</p>
     <div class="row" style="margin-top:16px"><button class="btn" data-act="dosave" ${S.busy ? "disabled" : ""}>${S.busy ? '<span class="spin"></span> Saving' : "Save"}</button>
     <label class="btn ghost" style="cursor:pointer">🖼️ Add image<input type="file" id="img" accept="image/*" hidden></label><button class="btn ghost" data-act="close">Cancel</button></div>` }
   if (s.type === "triage") { const it = inbox()[0], free = 3 - nowItems().length;
@@ -657,7 +696,7 @@ function sheetHtml() {
       <textarea class="field" id="rf" placeholder="${recipe ? "More garlic. 25 minutes, not 20." : "One line is plenty"}">${esc(s.text ?? "")}</textarea>
       <div class="row" style="margin-top:12px"><button class="chip ${s.wis ? "on" : ""}" data-act="tog" data-id="wis">${s.wis ? "✓ " : ""}💎 Also save the note to Wisdom</button></div>
       <button class="btn keep" style="margin-top:18px;width:100%" data-act="dofinish" data-id="${it.id}" ${S.busy ? "disabled" : ""}>${S.busy ? '<span class="spin"></span>' : "✓"} ${inNow ? "Done" : esc(markOf(it))}</button>
-      <p class="tiny" style="margin-top:10px;text-align:center">${inNow ? (room ? `Earns a ${passMin()}-minute scroll pass.` : `Your pass bank is full (${S.profile.pass_cap || 3}). Spend one to earn more.`) : "Logged on its shelf. Passes are earned by finishing things in Now."}</p>` } }
+      <p class="tiny" style="margin-top:10px;text-align:center">${inNow ? (room ? `Earns a ${passMin()}-minute scroll pass.` : `Your pass bank is full (${S.profile.pass_cap || 3}). Spend one to earn more.`) : "Logged in its folder. Passes are earned by finishing things in Now."}</p>` } }
   if (s.type === "earned") { const nw = nowItems(), bk = banked(), pool = [...nextItems(), ...candidates()].slice(0, 3 - nw.length);
     b = `<div class="big-em" aria-hidden="true">${s.got ? "🎟️" : "✅"}</div><h2 style="text-align:center">${s.got ? `+${s.got} minutes <em>earned</em>` : "Done."}</h2>
     <p class="mute" style="text-align:center;margin-top:6px">${[bk.length ? `${bk.length} pass${bk.length > 1 ? "es" : ""} banked · ${bk.reduce((a, x) => a + x.minutes, 0)} min` : "", !nw.length ? "Now is clear. All three done 🎉" : "", weekDone() >= goal() ? `Weekly goal hit (${weekDone()}/${goal()}).` : `${weekDone()} of ${goal()} this week.`].filter(Boolean).join(" · ")}</p>
@@ -669,12 +708,36 @@ function sheetHtml() {
     <div class="nlist" style="margin-top:16px">${nowItems().map(o => nrow(o, `<button class="btn sm ghost" data-act="swapout" data-id="${o.id}">Swap out</button>`)).join("")}</div>
     <p class="tiny" style="margin-top:8px">The one you swap out goes first in Up next.</p>
     <div class="row" style="margin-top:16px"><button class="btn ghost" data-act="swapnext">Put it first in Up next instead</button></div>` }
+  if (s.type === "folders") { const l = live();
+    b = `<h2>Your <em>folders</em></h2><p class="small mute" style="margin-top:4px">Every save goes in one. GSD picks the folder for each new save, and you can move a save from its page. Drag ≡ to change the order.</p>
+    <div class="nlist" data-sort="folders" style="margin-top:14px">${S.folders.map(f => { const n = inFolder(f, l).length; return `<div class="nrow" data-sid="${f.id}"><button class="grip ngrip" data-act="nudge" data-id="${f.id}" aria-label="Move ${esc(f.name)}: drag, or use the arrow keys" title="Drag to reorder"><i></i><i></i><i></i></button>
+      <button class="nrow-t" data-act="fedit" data-id="${f.id}"><b>${esc(fLabel(f))}</b><span class="tiny">${esc(f.todo_label)} · ${esc(f.done_label)} · ${n} save${n === 1 ? "" : "s"}</span></button>
+      <button class="ib" data-act="fedit" data-id="${f.id}" aria-label="Edit ${esc(f.name)}" title="Edit">✏️</button></div>` }).join("")}</div>
+    <label class="l" for="fnew">New folder</label>
+    <div class="row"><input class="field" id="fnew" placeholder="e.g. Travel, or 🎨 Art" maxlength="44" style="flex:1;min-width:0" enterkeyhint="done"><button class="btn" data-act="fadd">Add</button></div>
+    <button class="btn ghost" style="margin-top:16px;width:100%" data-act="close">Done</button>` }
+  if (s.type === "folder") { const f = S.folders.find(x => x.id === s.id), n = f ? inFolder(f).length : 0;
+    b = !f ? `<h2>That folder is gone.</h2><button class="btn" style="margin-top:16px" data-act="fback">Back</button>` : `<h2>${esc(fLabel(f))}</h2>
+    <div class="row" style="align-items:flex-end;flex-wrap:nowrap"><div style="width:72px;flex:none"><label class="l" for="fe">Emoji</label><input class="field" id="fe" value="${esc(f.emoji)}" maxlength="16" style="text-align:center;font-size:22px;padding-left:0;padding-right:0"></div>
+      <div style="flex:1;min-width:0"><label class="l" for="fn">Name</label><input class="field" id="fn" value="${esc(f.name)}" maxlength="40"></div></div>
+    <div class="row" style="flex-wrap:nowrap"><div style="flex:1;min-width:0"><label class="l" for="ft">Not done filter</label><input class="field" id="ft" value="${esc(f.todo_label)}" maxlength="30" placeholder="To do"></div>
+      <div style="flex:1;min-width:0"><label class="l" for="fd">Done filter</label><input class="field" id="fd" value="${esc(f.done_label)}" maxlength="30" placeholder="Done"></div></div>
+    <label class="l" for="fa">What goes here (helps GSD sort new saves)</label><input class="field" id="fa" value="${esc(f.about)}" maxlength="200" placeholder="e.g. Trips, hotels and places to see abroad">
+    <div class="row" style="margin-top:16px"><button class="btn" data-act="fsave" data-id="${f.id}" ${S.busy ? "disabled" : ""}>Save</button><button class="btn ghost" data-act="fback">Cancel</button>
+      <button class="btn ${s.del ? "drop" : "ghost"}" style="margin-left:auto" data-act="fdel" data-id="${f.id}">${s.del ? "Tap again to delete" : "🗑️ Delete"}</button></div>
+    ${s.del ? `<p class="tiny" style="margin-top:8px">${n ? `Its ${n} save${n === 1 ? "" : "s"} will be Unsorted, not deleted.` : "It's empty."}</p>` : ""}` }
+  if (s.type === "move") { const it = item(s.id), cur = it ? folderOf(it) : UNSORTED;
+    b = !it ? `<h2>That save is gone.</h2><button class="btn" style="margin-top:16px" data-act="close">Close</button>` : `<h2>Move to a <em>folder</em></h2><p class="small mute" style="margin-top:4px">${esc(it.title || "This save")}</p>
+    <div class="nlist" style="margin-top:14px">${S.folders.map(f => `<button class="frow${f.id === cur.id ? " on" : ""}" data-act="moveto" data-id="${f.id}" aria-pressed="${f.id === cur.id}"><span aria-hidden="true">${f.emoji}</span><b>${esc(f.name)}</b>${f.id === cur.id ? '<span aria-hidden="true">✓</span>' : ""}</button>`).join("")}</div>
+    <label class="l" for="mnew">Or a new folder</label>
+    <div class="row"><input class="field" id="mnew" placeholder="e.g. Travel" maxlength="44" style="flex:1;min-width:0" enterkeyhint="go"><button class="btn" data-act="movenew">Create and move</button></div>
+    <div class="row" style="margin-top:16px">${cur.id !== "none" ? `<button class="btn ghost" data-act="showfolder" data-id="${cur.id}">Everything in ${esc(cur.name)}</button>` : ""}<button class="btn ghost" data-act="fback">Back</button></div>` }
   if (s.type === "pick") b = `<h2>${s.lane === "next" ? "Add to <em>Up next</em>" : "Fill a <em>slot</em>"}</h2>
     <input class="field search" id="pq" type="search" placeholder="Search your library" value="${esc(s.q || "")}" aria-label="Search your library" style="margin-top:14px"><div id="picklist">${pickList()}</div>`;
   if (s.type === "rules") { const m = passMin(), cap = S.profile.pass_cap || 3;
     b = `<h2>How <em>Now</em> works</h2><p class="mute" style="margin-top:4px">Fewer possibilities. More done.</p>
     <ol class="rules">
-      <li><b>Three slots.</b> Only three things are active at a time. Everything else waits in Up next (five) or on your Library shelves.</li>
+      <li><b>Three slots.</b> Only three things are active at a time. Everything else waits in Up next (five) or in your Library folders.</li>
       <li><b>Finish to earn.</b> Each thing you finish from Now earns a ${m}-minute scroll pass. You can bank ${cap}.</li>
       <li><b>Clear all three, then hunt.</b> When Now is empty, scrolling opens in ${m}-minute hunts to find what's next. Share finds straight into Now.</li>
       <li><b>The gate.</b> With the iPhone automation on, opening Instagram, YouTube or TikTok shows your Now first. “Open anyway” always works, and counts as a slip.</li>
@@ -806,8 +869,8 @@ function ivMenu(it) {
 function ivHead(it) {
   const del = confirmDel === it.id;
   return `<div class="iv-head">
-    <div class="iv-kind"><span aria-hidden="true">${KIND[it.kind] || "✨"}</span>${pending(it) ? "Reading" : esc(cap1(it.kind) || "Save")}</div>
-    ${it.area && !pending(it) ? `<button class="iv-area lgb" data-act="ivarea" data-id="${esc(it.area)}" title="Everything in ${esc(it.area)}">${it.area === "Wisdom" ? "💎 " : ""}${esc(it.area)}</button>` : "<span></span>"}
+    <div class="iv-kind"><span aria-hidden="true">${KIND[it.kind] || "✨"}</span><span class="iv-kt">${pending(it) ? "Reading" : esc(cap1(it.kind) || "Save")}</span></div>
+    ${!pending(it) ? `<button class="iv-area lgb" data-act="ivfolder" data-id="${it.id}" title="Move to another folder" aria-label="Folder: ${esc(folderOf(it).name)}. Move to another folder">${esc(fLabel(folderOf(it)))} <span aria-hidden="true" style="opacity:.6">▾</span></button>` : "<span></span>"}
     <div class="iv-tools">
       <button class="iv-ic lgb" data-act="ivmenu" aria-label="More options" aria-haspopup="menu" aria-expanded="${!!S.sheet.menu}">${IC.more}</button>
       <button class="iv-ic del lgb${del ? " on" : ""}" data-act="delete" data-id="${it.id}" aria-label="${del ? "Tap again to delete forever" : "Delete"}">${IC.trash}${del ? "<span>Delete?</span>" : ""}</button>
@@ -994,7 +1057,7 @@ function fileToJpeg(file) {
 const H = {
   tab(id) { S.tab = id; S.sheet = null; S.folder = ""; refresh(); scrollTo(0, 0) },
   save(id) { openSheet({ type: "save", lane: ["now", "next"].includes(id) ? id : "library" }); setTimeout(() => $("#sv")?.focus(), 50) },
-  savelane(k) { const s = S.sheet; s.val = $("#sv").value; s.note = $("#sn").value; s.lane = k; renderSheet() },
+  savelane(k) { const s = S.sheet; s.val = $("#sv").value; s.note = $("#sn").value; s.folder = $("#sf").value; s.lane = k; renderSheet() },
   close() {
     const iv = $(".iv");
     if (iv && !iv.classList.contains("out") && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -1004,11 +1067,43 @@ const H = {
   ivmenu() { S.sheet.menu = !S.sheet.menu; renderSheet(); if (S.sheet.menu) $(".iv-menu [role=menuitem]")?.focus({ preventScroll: true }) },
   menuclose() {},
   ivnote() { S.sheet.noteOpen = true; renderSheet(); $("#note")?.focus() },
-  ivarea(id) { S.area = id; S.shelf = ""; S.lib = "areas"; S.q = ""; H.tab("library") },
-  ivtag(id) { S.q = id; S.area = ""; S.shelf = ""; S.lib = "all"; H.tab("library") },
+  ivfolder(id) { openSheet({ type: "move", id, back: { type: "item", id } }) },
+  ivtag(id) { S.q = id; S.fid = ""; S.lib = "all"; H.tab("library") },
+  showfolder(id) { S.fid = id; S.lib = "folders"; S.q = ""; S.shelfTab = "all"; H.tab("library") },
+  folders() { openSheet({ type: "folders" }); },
+  fedit(id) { openSheet({ type: "folder", id, back: S.sheet?.type === "folders" ? { type: "folders" } : null }) },
+  fback() { S.sheet = S.sheet?.back || null; refresh() },
+  async fadd() { const el = $("#fnew"), n = el?.value.trim(); if (!n) return el?.focus();
+    const f = await api.addFolder(n); if (!f) return; refresh(); toast(`Added ${fLabel(f)}`); $("#fnew")?.focus() },
+  async fsave(id) {
+    const f = S.folders.find(x => x.id === id), v = k => $("#" + k).value.replace(/\s+/g, " ").trim(); if (!f) return;
+    const patch = { emoji: v("fe") || "📁", name: v("fn").slice(0, 40), todo_label: v("ft") || "To do", done_label: v("fd") || "Done", about: v("fa").slice(0, 200) };
+    if (!patch.name) return toast("Give it a name");
+    if (S.folders.some(x => x.id !== id && x.name.toLowerCase() === patch.name.toLowerCase())) return toast("You already have a folder with that name");
+    const old = f.name; S.busy = true; renderSheet();
+    const { error } = await sb.from("folders").update(patch).eq("id", id); S.busy = false;
+    if (error) { console.error(error); toast("Couldn't save the folder"); return renderSheet() }
+    Object.assign(f, patch);
+    const ints = S.profile.interests || []; if (old !== f.name && ints.includes(old)) api.profile({ interests: ints.map(x => x === old ? f.name : x) });
+    H.fback(); toast("Saved") },
+  async fdel(id) {
+    const s = S.sheet; if (!s.del) { s.del = true; return renderSheet() }
+    const f = S.folders.find(x => x.id === id); if (!f) return H.fback();
+    const { error } = await sb.from("folders").delete().eq("id", id);
+    if (error) { console.error(error); return toast("Couldn't delete the folder") }
+    S.folders = S.folders.filter(x => x.id !== id); S.items.forEach(i => { if (i.folder_id === id) i.folder_id = null });
+    if (S.fid === id) S.fid = "";
+    S.sheet = s.back || null; refresh(); toast(`Deleted ${f.name}`) },
+  async moveto(fid) {
+    const s = S.sheet, it = item(s.id); if (!it) return;
+    const f = fById(fid), was = it.folder_id; if (!f || (was || "none") === fid) return H.fback();
+    try { await api.upd("items", it.id, { folder_id: fid === "none" ? null : fid, area_locked: true }) } catch { return }
+    S.sheet = s.back || null; refresh();
+    toast(`Moved to ${fLabel(f)}`, async () => { await api.upd("items", it.id, { folder_id: was }).catch(() => {}); refresh() }) },
+  async movenew() { const n = $("#mnew")?.value.trim(); if (!n) return $("#mnew")?.focus(); const f = await api.addFolder(n); if (f) H.moveto(f.id) },
   reload() { location.reload() },
   undo() { const u = toast.undo; $("#toast").innerHTML = ""; toast.undo = null; if (u) u() },
-  dosave() { const v = $("#sv").value.trim(); if (v) saveThing({ text: v, note: $("#sn").value.trim(), lane: S.sheet.lane || "library" }) },
+  dosave() { const v = $("#sv").value.trim(); if (v) saveThing({ text: v, note: $("#sn").value.trim(), folder: $("#sf").value, lane: S.sheet.lane || "library" }) },
   async open(id) {
     const it = item(id); if (!it) return;
     openSheet({ type: "item", id });
@@ -1033,20 +1128,26 @@ const H = {
     if (r !== "ok") return false;
     refresh(); return true;
   },
-  async tolib(id) { const a = !!actOf(id); if (await api.move(id, null, a ? {} : { status: "kept" }) === "ok") { refresh(); toast(a ? "Back with its save" : "Back on its shelf") } },
+  async tolib(id) { const a = !!actOf(id); if (await api.move(id, null, a ? {} : { status: "kept" }) === "ok") { refresh(); toast(a ? "Back with its save" : "Back in its folder") } },
   pull(id) { return H.toNow(id) },
   async tonext(id) { if (await H.toNext(id)) toast("⏭ In Up next") },
   async park(id) {
     const first = nextItems()[0];
     const a = !!actOf(id);
     let r = await api.move(id, "next", first ? { next_pos: first.next_pos - 1 } : {}), where = "first in Up next";
-    if (r === "next_full") { r = await api.move(id, null, a ? {} : { status: "kept" }); where = a ? "back with its save" : "back on its shelf" }
+    if (r === "next_full") { r = await api.move(id, null, a ? {} : { status: "kept" }); where = a ? "back with its save" : "back in its folder" }
     if (r !== "ok") return;
     refresh(); toast(`Parked: ${where}`, async () => { if (await api.move(id, "now") === "ok") refresh(); else toast("Its slot is taken now") });
   },
   nudge() {}, // the handle's click; dragging and arrow keys do the work
   // A new order for Now or Up next (ids of saves and actions). Shown straight away, then saved.
   async reorder(lane, ids) {
+    if (lane === "folders") {
+      ids.forEach((id, k) => { const f = S.folders.find(x => x.id === id); if (f) f.pos = k + 1 }); S.folders.sort((a, b) => a.pos - b.pos); refresh();
+      const { error } = await sb.rpc("reorder_folders", { p_ids: ids });
+      if (error) { console.error(error); toast("Couldn't save the order"); try { await api.load() } catch {} refresh() }
+      return;
+    }
     ids.forEach((id, k) => { const x = entry(id); if (x) { if (lane === "now") x.slot = k + 1; else x.next_pos = k + 1 } });
     render();
     const { error } = await sb.rpc("reorder_lane", { p_lane: lane, p_ids: ids });
@@ -1057,7 +1158,7 @@ const H = {
   async ivlane(v) { const [id, k] = v.split("|"), it = item(id); if (!it || (it.lane || "") === k && it.status !== "let_go") return;
     if (k === "now") return H.toNow(id);
     if (k === "next") { if (await H.toNext(id)) toast("⏭ In Up next"); return }
-    if (it.status === "let_go") { await api.lane(id, null, { status: "kept", let_go_at: null }); refresh(); return toast("Back on its shelf") }
+    if (it.status === "let_go") { await api.lane(id, null, { status: "kept", let_go_at: null }); refresh(); return toast("Back in its folder") }
     H.tolib(id) },
   // The plan is what finishing the whole save means. Choosing it doesn't move anything.
   async plan(aid) { const a = actOf(aid), it = a && item(a.item_id); if (!it) return;
@@ -1095,7 +1196,7 @@ const H = {
     let extra = "";
     if (s.wis && text) {
       const { data, error } = await sb.from("items").insert({ source: "note", kind: "quote", via: "app", title: text.split("\n")[0].slice(0, 80), summary: text, insight: text.slice(0, 240), content_text: text,
-        area: "Wisdom", area_locked: true, status: "kept", stage: "ready", quality: "full", note: "From: " + it.title }).select(ITEM_COLS).single();
+        area: "Wisdom", area_locked: true, folder_id: it.folder_id || null, status: "kept", stage: "ready", quality: "full", note: "From: " + it.title }).select(ITEM_COLS).single();
       if (error) toast("Couldn't save to Wisdom"); else { S.items.unshift(data); extra = " · saved to Wisdom" }
     }
     await api.loadFocus();
@@ -1112,7 +1213,7 @@ const H = {
     let extra = "";
     if (s.wis && text) {
       const { data, error } = await sb.from("items").insert({ source: "note", kind: "quote", via: "app", title: text.split("\n")[0].slice(0, 80), summary: text, insight: text.slice(0, 240), content_text: text,
-        area: "Wisdom", area_locked: true, status: "kept", stage: "ready", quality: "full", note: "From: " + a.title }).select(ITEM_COLS).single();
+        area: "Wisdom", area_locked: true, folder_id: it?.folder_id || null, status: "kept", stage: "ready", quality: "full", note: "From: " + a.title }).select(ITEM_COLS).single();
       if (error) toast("Couldn't save to Wisdom"); else { S.items.unshift(data); extra = " · saved to Wisdom" }
     }
     await api.loadFocus();
@@ -1158,8 +1259,8 @@ const H = {
   async delete(id) { if (confirmDel !== id) { confirmDel = id; renderSheet(); return } await api.del("items", id); S.actions.forEach(a => { if (a.item_id === id) a.item_id = null }); S.sheet = null; await api.loadFocus(); refresh(); toast("Deleted") },
   ask() { S.ask = S.ask || {}; openSheet({ type: "ask" }); setTimeout(() => $("#aq")?.focus(), 50) },
   askq(id) { $("#aq").value = id; doAsk() },
-  lib(id) { S.lib = id; S.area = ""; S.shelf = ""; S.folder = ""; render() },
-  grp(id) { if (S.lib === "areas") S.area = id; else { S.shelf = id; S.shelfTab = "todo" } S.folder = ""; render(); scrollTo({ top: 0, behavior: "smooth" }) },
+  lib(id) { S.lib = id; S.fid = ""; S.folder = ""; render() },
+  grp(id) { S.fid = id; S.lib = "folders"; S.shelfTab = "todo"; S.folder = ""; render(); scrollTo({ top: 0, behavior: "smooth" }) },
   shtab(id) { S.shelfTab = id; render() },
   gfopen(id) { gfSet(S.folder === id ? "" : id) },
   mode(id) { S.mode = id; render() }, more() { S.more = true; render() },
@@ -1265,11 +1366,12 @@ document.addEventListener("input", e => {
 });
 document.addEventListener("change", async e => {
   const t = e.target;
-  if (t.id === "img" && t.files[0]) { try { const b64 = await fileToJpeg(t.files[0]); saveThing({ image_base64: b64, note: $("#sn")?.value.trim() || "", lane: S.sheet?.lane || "library" }) } catch { toast("Couldn't read that image") } }
+  if (t.id === "img" && t.files[0]) { try { const b64 = await fileToJpeg(t.files[0]); saveThing({ image_base64: b64, note: $("#sn")?.value.trim() || "", folder: $("#sf")?.value || "", lane: S.sheet?.lane || "library" }) } catch { toast("Couldn't read that image") } }
   if (t.dataset.save) { const k = t.dataset.save, num = ["daily_minutes", "weekly_goal", "pass_minutes", "pass_cap"].includes(k);
     api.profile({ [k]: num ? Number(t.value) : t.value.trim(), onboarded_at: S.profile.onboarded_at || now() }).then(() => { toast("Saved"); if (num) render() }) }
   if (t.dataset.note) api.upd("items", t.dataset.note, { note: t.value.trim() }).then(() => toast("Note saved")).catch(() => {});
 });
+document.addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing && ["fnew", "mnew"].includes(e.target.id)) { e.preventDefault(); e.target.id === "fnew" ? H.fadd() : H.movenew() } });
 document.addEventListener("keydown", e => { if (e.key !== "Escape" || !S.sheet) return; if (S.sheet.menu) { S.sheet.menu = false; renderSheet(); $(".iv-tools .iv-ic")?.focus() } else H.close() });
 // Coming back to the app after a while: reload quietly, so saves from the share sheet and passes spent at the gate show up.
 let hiddenAt = 0;

@@ -3,12 +3,12 @@
 Save what inspires you. Do something with it. Live more.
 
 ## How it works
-- **Now: three slots.** Only three saves are active at a time. Each has a plan (the one action that counts as doing it: cook it, watch it, go there). Up to five more wait in **Up next**; everything else lives on **Library shelves** (Watch, Cook, Go, Read, Try, Move, Listen, Ideas).
+- **Now: three slots.** Only three saves are active at a time. Each has a plan (the one action that counts as doing it: cook it, watch it, go there). Up to five more wait in **Up next**; everything else lives in **Library folders**: your own set (Personal Growth, Restaurants, Home, Movies, Books, Recipes, Workout, Golf, AI, Fashion to start), which you add, rename, reorder and delete under Library → ✏️ Folders. GSD puts each new save in the best fit; move it from the folder button on its page. Each folder has its own filters, like *To cook / Tried & tested* or *To watch / Watched*.
 - **Finish to earn.** Finishing something in Now earns a scroll pass (15 min by default, bank up to 3). With Now empty, scrolling opens in time-boxed *hunts* to find what's next.
 - **The gate.** An iPhone automation on Instagram, YouTube and TikTok checks `gate-check`; with no pass running, GSD opens first and shows your Now. "Open anyway" always works and is counted as a slip.
-- **Done is a record.** Finishing asks how it was (😍 / 👍 / 😐) plus a note, so the Cook shelf builds a *Tried & tested* list, and Watch, Go and Read shelves keep what you've seen and been to.
+- **Done is a record.** Finishing asks how it was (😍 / 👍 / 😐) plus a note, so Recipes builds a *Tried & tested* list (best rated first), and the other folders keep what you've watched, read and been to.
 - **Metrics are about Now:** the weekly gauge (finished vs your goal), streak of weeks, passes banked, minutes scrolled through passes, slips and times you turned back. You → *Your focus* shows eight weeks.
-- Save from the iPhone share sheet with a Now / Up next / Library menu (or `#now` / `#next` in the text). Setup steps are in the app: You → Set up the iPhone.
+- Save from the iPhone share sheet with a Now / Up next / Library menu (or `#now` / `#next` in the text). A Shortcut can also send `folder` (a folder's name) to pick the folder itself. Setup steps are in the app: You → Set up the iPhone.
 
 ## What is here
 - `index.html`, `app.js` — the whole web app. No build step. Deploy the folder as a static site (Vercel: framework "Other", no build command).

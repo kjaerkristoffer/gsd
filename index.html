@@ -525,6 +525,12 @@ ol.steps{padding-left:20px;margin:10px 0 0;line-height:1.7}ol.steps li{margin-bo
 .frow{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 14px;border-radius:15px;background:var(--card);box-shadow:var(--rim),0 0 0 .5px var(--hair)}
 .frow b{flex:1;min-width:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .frow:disabled{opacity:1;cursor:default}
+.frow.on{box-shadow:inset 0 0 0 2px var(--fg),0 0 0 .5px var(--hair)}
+.frow>span:first-child{font-size:18px;width:24px;text-align:center}
+/* the folder pill needs the room on a phone: the kind keeps its emoji, its word is only read out */
+@media (max-width:430px){.iv-kt{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.iv-area{padding:7px 14px}}
+.lib-hd{display:flex;align-items:center;justify-content:space-between;gap:12px}.lib-hd .chip{flex:none}
+.crumb .chip+h2{margin-left:0}
 .card.plan{box-shadow:var(--rim),0 0 0 1.5px var(--fg),var(--sh1)}
 /* eight weeks chart */
 .wk{margin:0}.wk svg{display:block;width:100%;max-width:520px;margin:0 auto;overflow:visible}
