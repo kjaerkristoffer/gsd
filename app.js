@@ -448,7 +448,9 @@ function gfPaint(preset, seed, w, h, done) {
     if (gfStore[key]) { const im = new Image(); im.onload = () => fin(im); im.onerror = paint; im.src = gfStore[key] } else paint() }
   GF_WAIT.get(key).push(c => done(c, false));
 }
-const GF_BACK = "M0 56A22 22 0 0 1 22 34L146 34C170 34 172 0 198 0L318 0A22 22 0 0 1 340 22L340 250A22 22 0 0 1 318 272L22 272A22 22 0 0 1 0 250Z";
+// The back's lower part is 4px smaller than the front all round, so none of its art shows past the front's edges
+// (the two used to share an outline, and anti-aliasing let a sliver of the art through at the sides and bottom).
+const GF_BACK = "M0 56A22 22 0 0 1 22 34L146 34C170 34 172 0 198 0L318 0A22 22 0 0 1 340 22L340 98L336 104L336 250A18 18 0 0 1 318 268L22 268A18 18 0 0 1 4 250L4 104L0 98Z";
 const GF_FRONT = "M0 22A22 22 0 0 1 22 0L118 0C144 0 146 32 172 32L318 32A22 22 0 0 1 340 54L340 176A22 22 0 0 1 318 198L22 198A22 22 0 0 1 0 176Z";
 const gfSlot = (i, n) => n <= 1 ? 0 : (i / (n - 1)) * 2 - 1;
 const gfSeen = new Set(); // folders that have already assembled themselves once this session
