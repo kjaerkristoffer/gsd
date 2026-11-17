@@ -12,3 +12,4 @@ Personal inspiration-to-action web app. Vanilla JS frontend (no build step) on V
 - Pipeline: items table is a work queue; worker handles one item per run (read, understand, then find real links). Map links are resolved inside Postgres via pg_net.
 - Design: black/white, system font, pill buttons, emoji icons, `data-theme` light/dark.
 - Rules: output is always English; links prefer the person's country version (profiles.country); budget guide about $5/month of OpenAI.
+- Supadata credits are scarce (~100/month): saves get a quick read (YouTube 1 credit, Instagram 2); watching and transcribing only on a full read (items.deep_read or profiles.full_read). Every paid `sd()` call passes its documented cost; the worker books it via note_credits. Keep new Supadata calls behind that metering and the RESERVE guard. Only YouTube and Instagram matter for video.

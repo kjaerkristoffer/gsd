@@ -30,7 +30,11 @@ Save what inspires you. Do something with it. Live more.
 - The first account created is the owner; later sign-ups need a row in `allowed_emails`.
 - Ask returns the whole answer at once (spec: streamed).
 - Bigger models than the spec: `gpt-6.1-sol` reads each save, `gpt-6.1-terra` with web search finds the real links. Roughly $0.05-0.10 per save; the You tab shows the month's estimate against a $5 guide.
-- Short clips are also watched (Supadata extract) so on-screen text is read; toggle in You.
+- Supadata saver (the plan has ~100 credits a month). Videos are read on a ladder, cheapest first:
+  - **Quick read (default):** YouTube 1 credit (captions; title from the free oEmbed), Instagram 2 (metadata + captions). Web pages use the scraper (1) only when the page gave almost nothing.
+  - **Full read** (🎧 toggle when saving, `read: "Full"` or `#full` from a Shortcut, 🎧 *Read it fully* on a save, or *Always* in You): also watches clips up to 3 minutes (extract, 5 credits a started minute), which reads on-screen text and hears the speech; only if nothing was heard, transcribes the audio (2 credits a minute, within the length and daily limits). A 36-second reel measured 7 credits.
+  - **Accounting:** every paid call is metered (`x-billable-requests` when Supadata sends it, else the documented price) and booked on the save (`items.supadata_credits`), the day (`usage_daily.supadata_credits`) and a cached copy of the real balance (`provider_account`, synced from Supadata's free `GET /v1/me` at most every 2 minutes). You shows credits left and this month's spend.
+  - **Guard:** full reads never spend the last 10 credits. When the account is empty, saves still get read from what is free (caption, title) instead of failing.
 - Not built yet: push notifications, offline outbox, service worker, weekly review, collections, export/delete account, the swipe picker for films and recipes.
 
 ## After deploying

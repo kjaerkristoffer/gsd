@@ -66,7 +66,7 @@ const RES_LABEL = { article: "Read it", paper: "Read the paper", book: "See the 
 const PRICE = { "gpt-6-luna": [.1, .5], "gpt-6.1-terra": [1, 5], "gpt-6.1-sol": [2, 10], "gpt-6-astra": [10, 50], "text-embedding-3-small": [.02, 0] };
 const BUDGET = 5;
 const LADDER = [1, 3, 7, 14, 30, 60, 120];
-const ITEM_COLS = "id,url,canonical_url,source,kind,title,author,thumb_path,start_seconds,summary,insight,takeaways,quotes,entities,area,tags,note,status,stage,error_code,quality,resaved_count,remember,last_surfaced_at,opened_count,created_at,diag,resources,enrich_state,lane,slot,lane_at,next_pos,plan_action_id,done_at,done_count,rating,done_note,folder_id,area_locked";
+const ITEM_COLS = "id,url,canonical_url,source,kind,title,author,thumb_path,start_seconds,summary,insight,takeaways,quotes,entities,area,tags,note,status,stage,error_code,quality,resaved_count,remember,last_surfaced_at,opened_count,created_at,diag,resources,enrich_state,lane,slot,lane_at,next_pos,plan_action_id,done_at,done_count,rating,done_note,folder_id,area_locked,deep_read,supadata_credits,duration_seconds";
 const ERR = {
   private_or_missing: "This post is private or was removed. GSD can only read public links.",
   unreadable: "GSD couldn't read this page. You can still add your own note.",
@@ -75,7 +75,7 @@ const ERR = {
   ai_error: "Something went wrong understanding this. Tap Re-read.",
   no_content: "The reader couldn't get anything from this post. It may be private, or the reader service refused it. Tap Re-read to try again.",
   reader_not_configured: "The transcript key isn't working (Supabase → Edge Functions → Secrets → SUPADATA_API_KEY). Then tap Re-read.",
-  reader_limit: "The transcript service has run out of credits for now. Top up at supadata.ai, then tap Re-read.",
+  reader_limit: "Out of transcript credits, and there was nothing free to read. Tap Re-read when Supadata renews (You shows the balance).",
   ai_not_configured: "The AI key isn't set up yet (Supabase → Edge Functions → Secrets → OPENAI_API_KEY). Then tap Re-read.",
 };
 function toast(m, undo) {
@@ -142,6 +142,8 @@ const api = {
     const { error } = await sb.from("profiles").update(patch).eq("user_id", S.user.id);
     if (error) toast("Couldn't save settings");
   },
+  // Supadata transcript credits: the account's real balance and what GSD spent this month (see the credits route).
+  async loadCredits() { const r = await api.fn("credits", {}); if (r && !r.error) S.credits = r; return S.credits },
   async fn(route, body) {
     const { data, error } = await sb.functions.invoke("gsd/" + route, { body });
     if (error) { let j = {}; try { j = await error.context.json() } catch {} return { error: j.error || "error", message: j.message || error.message } }
@@ -634,10 +636,12 @@ function vProfile() {
   <div class="sec"><div class="hd"><h2>Reading and AI</h2></div>
     ${(() => { const sp = spend(); return `<div class="card soft"><div class="row" style="justify-content:space-between"><h3>≈ $${sp.total.toFixed(2)} this month</h3><span class="small mute">guide: $${BUDGET}</span></div>
       <div class="bar" style="margin:10px 0 6px"><i style="width:${Math.min(100, 100 * sp.total / BUDGET)}%"></i></div>
-      <div class="tiny">${sp.saves} save${sp.saves === 1 ? "" : "s"} read${sp.saves ? ` · about $${(sp.total / sp.saves).toFixed(2)} each` : ""}. An estimate from token counts; your OpenAI bill is the real number. Nothing is blocked at $${BUDGET}. Transcripts are billed separately by Supadata.</div></div>` })()}
-    <div class="row" style="margin-top:12px"><button class="chip ${p.watch_video !== false ? "on" : ""}" data-act="watch">${p.watch_video !== false ? "✓ " : ""}Watch short videos too (reads on-screen text)</button>
+      <div class="tiny">${sp.saves} save${sp.saves === 1 ? "" : "s"} read${sp.saves ? ` · about $${(sp.total / sp.saves).toFixed(2)} each` : ""}. An estimate from token counts; your OpenAI bill is the real number. Nothing is blocked at $${BUDGET}. Transcripts use Supadata credits, counted below.</div></div>` })()}
+    ${creditsCard()}
+    <div class="row" style="margin-top:12px"><button class="chip ${p.full_read ? "on" : ""}" data-act="fullread">${p.full_read ? "✓ " : ""}🎧 Always read saves fully</button>
+      <button class="chip ${p.watch_video !== false ? "on" : ""}" data-act="watch">${p.watch_video !== false ? "✓ " : ""}A full read watches short clips (on-screen text)</button>
       <button class="chip ${p.auto_remember ? "on" : ""}" data-act="autorem">${p.auto_remember ? "✓ " : ""}Help me remember what I learn</button></div>
-    <p class="tiny" style="margin-top:8px">Watching uses about 5 extra Supadata credits per minute of video. Clips up to 3 minutes only.</p></div>
+    <p class="tiny" style="margin-top:8px">Saves get a quick read by default: the caption and any existing subtitles. That is 1 credit for YouTube and 2 for Instagram. A full read (🎧 when you save, or on a save later) also watches clips up to 3 minutes, 5 credits a minute, and only if it still heard nothing, transcribes the audio, 2 credits a minute. Full reads stop ${S.credits?.reserve ?? 10} credits before empty, so quick reads keep working.</p></div>
   <div class="sec"><div class="hd"><h2>Appearance</h2></div>
     <div class="chips">${[["auto", "Match my device"], ["light", "☀️ Light"], ["dark", "🌙 Dark"]].map(([k, n]) => `<button class="chip ${themePref() === k ? "on" : ""}" data-act="theme" data-id="${k}">${n}</button>`).join("")}</div></div>
   <div class="sec"><div class="hd"><h2>Save from anywhere</h2></div>
@@ -665,6 +669,8 @@ function sheetHtml() {
     <label class="l" for="sv">Link or text</label><textarea class="field" id="sv" placeholder="https://www.instagram.com/reel/…">${esc(s.val || "")}</textarea>
     <label class="l" for="sn">Why are you saving it? (optional)</label><input class="field" id="sn" placeholder="e.g. try this at the weekend" value="${esc(s.note || "")}">
     <label class="l" for="sf">Folder</label><select class="field" id="sf"><option value="">✨ Let GSD pick</option>${S.folders.map(f => `<option value="${f.id}" ${s.folder === f.id ? "selected" : ""}>${esc(fLabel(f))}</option>`).join("")}</select>
+    <button class="chip ${s.full && !fullBlocked() ? "on" : ""}" style="margin-top:12px" data-act="savefull" aria-pressed="${!!s.full && !fullBlocked()}" ${fullBlocked() ? "disabled" : ""}>${s.full && !fullBlocked() ? "✓ " : ""}🎧 Read it fully</button>
+    <p class="tiny" style="margin-top:6px">${fullBlocked() ? `Only ${crWord(crLeft())} left, kept for quick reads until Supadata renews.` : s.full ? "Also watches clips up to 3 minutes and transcribes speech that has no subtitles: about 7 transcript credits for a reel under a minute, 12 up to two." : "Off: a quick read from the caption and existing subtitles, 1–2 transcript credits. You can read it fully later."}${crLeft() != null && !fullBlocked() ? ` ${crLeft()} left.` : ""}</p>
     <label class="l">Where does it go?</label>
     <div class="seg" role="radiogroup" aria-label="Where it goes">${[["now", `⚡ Now${free ? ` · ${free} free` : " · full"}`], ["next", "⏭ Up next"], ["library", "📚 Library"]].map(([k, n]) => `<button role="radio" aria-checked="${lane === k}" class="${lane === k ? "on" : ""}" data-act="savelane" data-id="${k}">${n}</button>`).join("")}</div>
     <p class="tiny" style="margin-top:8px">${lane === "now" ? (free ? "It becomes one of your three. Finishing it earns a scroll pass." : "Now is full, so it goes first in Up next. Swap it in when a slot frees up.") : lane === "next" ? "It waits in line for a free slot." : "It goes in its folder. Pull it into Now whenever you're ready."}</p>
@@ -778,6 +784,7 @@ function sheetHtml() {
       <li>Request Body <b>JSON</b>: <code>text</code> = Shortcut Input, <code>lane</code> = Chosen Item, <code>via</code> = <code>shortcut</code>.</li>
       <li>Add <b>Get Dictionary Value</b> for <code>message</code>, then <b>Show Notification</b> with it. It tells you where the save went: “Saved to Now (slot 2 of 3).”</li></ol>
     <p class="tiny" style="margin-top:8px">Don't want the menu? Skip step 2 and leave out <code>lane</code>. Saves then go to the Library, and writing <code>#now</code> or <code>#next</code> in the shared text still works.</p>
+    <p class="tiny" style="margin-top:8px">Saves get a quick read to spare transcript credits. To read one fully (watch the clip, transcribe speech), add <code>read</code> = <code>Full</code> to the request, or write <code>#full</code> in the shared text.</p>
     <h3 class="sec">2 · The scroll gate</h3>
     <ol class="small steps">
       <li>Sign in to GSD once in <b>Safari</b> at <code style="word-break:break-all">${esc(site)}</code> (the gate opens there).</li>
@@ -860,6 +867,36 @@ function ivMedia(it) {
     <div class="iv-src"${capt ? "" : ' style="margin-top:0"'}><span class="iv-ico ${esc(it.source || "web")}" aria-hidden="true">${sico}</span><div><b>${esc(who)}</b><span>${esc(sub)}</span></div>${u ? `<span class="go" aria-hidden="true">↗</span>` : ""}</div></div>`;
   return u ? `<a class="iv-card" href="${esc(u)}" target="_blank" rel="noopener noreferrer" aria-label="Open the original${sname ? " on " + esc(sname) : ""}">${inner}</a>` : `<div class="iv-card">${inner}</div>`;
 }
+/* ---------- transcript credits ---------- */
+// Mirrors the worker's ladder. Quick read: YouTube 1 credit (captions), Instagram 2 (metadata + captions).
+// Full read adds watching clips up to 3 minutes (5 a started minute) and, when nothing was heard, transcribing (2 a minute).
+// A full read never spends the last `reserve` credits; quick reads go on until the account is empty.
+const crLeft = () => S.credits?.left ?? null; // null: not known (yet)
+const fullBlocked = () => crLeft() != null && crLeft() <= (S.credits?.reserve ?? 10);
+const crWord = n => `${n} credit${n === 1 ? "" : "s"}`;
+// What reading this save fully would cost, step by step as the worker does it, and whether it would add anything.
+// Watching usually hears the speech too, so transcribing is only counted when the clip won't be watched.
+function fullCost(it) {
+  const d = it.duration_seconds || 0, mins = Math.max(1, Math.ceil((d || 90) / 60));
+  if (it.source === "web") return { cost: 1, adds: it.quality !== "full" };
+  const quick = 2; // a full read starts with metadata + captions for YouTube and Instagram alike
+  const watch = S.profile.watch_video !== false && (d ? d <= 180 : it.source !== "youtube") ? 5 * mins : 0;
+  const hear = !watch && it.quality !== "full" && (d || it.source !== "youtube") && mins <= (S.profile.transcribe_minutes ?? 10) ? 2 * mins : 0;
+  return { cost: quick + watch + hear, adds: watch + hear > 0 };
+}
+const costText = c => `about ${crWord(c.cost)}`;
+// A save read the quick way can be read again fully (watching short clips, transcribing speech without captions) when that adds something.
+const canReadFully = it => !it.deep_read && !S.profile.full_read && !["note", "image", "maps"].includes(it.source) && !pending(it) && fullCost(it).adds;
+function creditsCard() {
+  const c = S.credits;
+  if (!c) return `<div class="card soft" style="margin-top:12px"><h3>Transcript credits</h3><p class="tiny" style="margin-top:6px"><span class="spin"></span> Checking with Supadata…</p></div>`;
+  if (!c.configured) return `<div class="card soft" style="margin-top:12px"><h3>Transcript credits</h3><p class="tiny" style="margin-top:6px">No Supadata key is set, so videos are read from their caption only.</p></div>`;
+  const known = c.max != null && c.max > 0, pct = known ? Math.min(100, 100 * c.used / c.max) : 0, low = known && c.left <= c.reserve;
+  return `<div class="card soft" style="margin-top:12px"><div class="row" style="justify-content:space-between"><h3>${known ? `${c.left} transcript credits left` : "Transcript credits"}</h3><span class="small mute">${esc(c.plan || "Supadata")}</span></div>
+    ${known ? `<div class="bar" style="margin:10px 0 6px"><i style="width:${pct}%${low ? ";background:var(--red)" : ""}"></i></div>` : ""}
+    <div class="tiny">${known ? `${c.used} of ${c.max} used this period. ` : ""}This month GSD used ${crWord(c.month_spent)}${c.month_saves ? ` on ${c.month_saves} save${c.month_saves === 1 ? "" : "s"}, about ${(c.month_spent / c.month_saves).toFixed(1)} each` : ""}.</div>
+    ${low ? `<div class="banner" style="margin:10px 0 0;background:var(--red-bg);color:var(--red)">${c.left ? `Only ${crWord(c.left)} left: full reads are paused so quick reads keep working.` : "Out of transcript credits: saves are read from their caption until Supadata renews."}</div>` : ""}</div>`;
+}
 function ivMenu(it) {
   const u = safeUrl(it.url);
   return `<div class="iv-catch" data-act="menuclose"></div><div class="iv-menu lg" role="menu">
@@ -867,6 +904,7 @@ function ivMenu(it) {
       <button role="menuitem" data-act="copy" data-id="${esc(u)}"><span aria-hidden="true">🔗</span>Copy link</button>` : ""}
     ${S.cards.some(c => c.item_id === it.id) ? `<button role="menuitem" data-act="remember" data-id="${it.id}"><span aria-hidden="true">🧠</span>${it.remember ? "Stop remembering" : "Help me remember"}</button>` : ""}
     ${it.area === "Wisdom" && it.source === "note" ? "" : `<button role="menuitem" data-act="reprocess" data-id="${it.id}"><span aria-hidden="true">🔄</span>Re-read</button>`}
+    ${canReadFully(it) && !fullBlocked() ? `<button role="menuitem" data-act="readfull" data-id="${it.id}"><span aria-hidden="true">🎧</span>Read it fully · ${costText(fullCost(it)).replace("about ", "~")}</button>` : ""}
     ${it.status !== "let_go" ? `<button role="menuitem" data-act="letgo" data-id="${it.id}"><span aria-hidden="true">🍃</span>Let go</button>` : ""}</div>`;
 }
 function ivHead(it) {
@@ -915,7 +953,7 @@ function ivLane(it) {
 function ivBody(it) {
   const u = safeUrl(it.url), [sname] = SRC[it.source] || SRC.web;
   if (pending(it)) return `${ivHead(it)}<h2 class="iv-title"><span class="spin"></span> Reading it…</h2>
-    <p class="iv-sum">Usually under a minute. GSD listens to it, watches short clips and then looks up what was mentioned. You can close this.</p>${ivLane(it)}`;
+    <p class="iv-sum">Usually under a minute. GSD reads the caption and subtitles${it.deep_read || S.profile.full_read ? ", watches short clips" : ""} and then looks up what was mentioned. You can close this.</p>${ivLane(it)}`;
   const pid = planOf(it)?.id, acts = itemActs(it.id).sort((x, y) => (y.id === pid) - (x.id === pid) || (x.resource_idx ?? 99) - (y.resource_idx ?? 99)), rel = S.related[it.id];
   const ts = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`, d = daysIn(it), sh = shelfOf(it);
   const meta = [sname || hostOf(u), "saved " + ago(it.created_at), it.resaved_count ? `saved ${it.resaved_count + 1} times` : "",
@@ -942,7 +980,8 @@ function ivBody(it) {
     ${(it.resources || []).length ? `<section class="iv-sec"><h3 class="iv-h">Mentioned <small>${it.enrich_state === "pending" ? '<span class="spin"></span> Finding the links…' : it.resources.length}</small></h3>
       <div class="iv-cols">${it.resources.map(r => resCard(r, it)).join("")}</div></section>` : ""}
     ${rel?.length ? `<section class="iv-sec"><h3 class="iv-h">Related saves</h3><div class="iv-rel">${rel.map(tile).join("")}</div></section>` : ""}
-    <p class="iv-foot">${[it.opened_count ? `Opened ${it.opened_count} time${it.opened_count === 1 ? "" : "s"}` : "", it.quality === "caption_only" ? "Read from the caption only" : it.quality === "title_only" ? "Only the title was readable" : ""].filter(Boolean).join(" · ")}</p>`;
+    <p class="iv-foot">${[it.opened_count ? `Opened ${it.opened_count} time${it.opened_count === 1 ? "" : "s"}` : "", it.quality === "caption_only" ? "Read from the caption only" : it.quality === "title_only" ? "Only the title was readable" : "", it.deep_read ? "Read fully" : "", it.supadata_credits ? `${crWord(it.supadata_credits)} used` : ""].filter(Boolean).join(" · ")}</p>
+    ${canReadFully(it) && it.quality !== "full" ? `<div class="row" style="justify-content:center;margin-top:10px"><button class="btn sm ghost" data-act="readfull" data-id="${it.id}" ${fullBlocked() ? "disabled" : ""}>🎧 Read it fully</button></div><p class="tiny" style="text-align:center;margin-top:6px">${fullBlocked() ? `Only ${crWord(crLeft())} left, kept for quick reads.` : `Watches the clip and transcribes what is said: ${costText(fullCost(it))}.`}</p>` : ""}`;
 }
 let ivStatic = false;
 function itemView(it) {
@@ -1044,7 +1083,7 @@ function poll() {
     if (!document.hidden) {
       let changed = false;
       for (const it of waiting.slice(0, 6)) { const before = it.stage, eb = it.enrich_state; const n = await api.refreshItem(it.id); if (!n || n.stage !== before || n.enrich_state !== eb) changed = true; if (n && n.stage === "ready" && before !== "ready") toast("Ready: " + (n.title || "").slice(0, 40)) }
-      if (changed) refresh();
+      if (changed) { refresh(); api.loadCredits().then(refresh).catch(() => {}) }
     }
     poll();
   }, 4000);
@@ -1059,8 +1098,9 @@ function fileToJpeg(file) {
 /* ---------- actions ---------- */
 const H = {
   tab(id) { S.tab = id; S.sheet = null; S.folder = ""; refresh(); scrollTo(0, 0) },
-  save(id) { openSheet({ type: "save", lane: ["now", "next"].includes(id) ? id : "library" }); setTimeout(() => $("#sv")?.focus(), 50) },
+  save(id) { openSheet({ type: "save", lane: ["now", "next"].includes(id) ? id : "library", full: !!S.profile.full_read }); setTimeout(() => $("#sv")?.focus(), 50) },
   savelane(k) { const s = S.sheet; s.val = $("#sv").value; s.note = $("#sn").value; s.folder = $("#sf").value; s.lane = k; renderSheet() },
+  savefull() { const s = S.sheet; s.val = $("#sv").value; s.note = $("#sn").value; s.folder = $("#sf").value; s.full = !s.full; renderSheet() },
   close() {
     const iv = $(".iv");
     if (iv && !iv.classList.contains("out") && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -1106,7 +1146,7 @@ const H = {
   async movenew() { const n = $("#mnew")?.value.trim(); if (!n) return $("#mnew")?.focus(); const f = await api.addFolder(n); if (f) H.moveto(f.id) },
   reload() { location.reload() },
   undo() { const u = toast.undo; $("#toast").innerHTML = ""; toast.undo = null; if (u) u() },
-  dosave() { const v = $("#sv").value.trim(); if (v) saveThing({ text: v, note: $("#sn").value.trim(), folder: $("#sf").value, lane: S.sheet.lane || "library" }) },
+  dosave() { const v = $("#sv").value.trim(); if (v) saveThing({ text: v, note: $("#sn").value.trim(), folder: $("#sf").value, lane: S.sheet.lane || "library", full: !!S.sheet.full && !fullBlocked() }) },
   async open(id) {
     const it = item(id); if (!it) return;
     openSheet({ type: "item", id });
@@ -1258,7 +1298,8 @@ const H = {
   async remember(id) { const it = item(id), on = !it.remember; await api.upd("items", id, { remember: on });
     for (const c of S.cards.filter(x => x.item_id === id)) await api.upd("recall_cards", c.id, on ? { active: true, step: 0, due: addDays(1) } : { active: false, due: null });
     toast(on ? "It'll come back tomorrow, then less and less often" : "Stopped"); renderSheet() },
-  async reprocess(id) { const it = item(id); it.stage = "queued"; refresh(); const r = await api.fn("reprocess", { item_id: id }); if (r?.error) toast("Couldn't start: " + (r.message || r.error)); poll() },
+  async reprocess(id, how) { const it = item(id), full = how === "full"; it.stage = "queued"; if (full) it.deep_read = true; S.sheet && (S.sheet.menu = false); refresh(); const r = await api.fn("reprocess", { item_id: id, full }); if (r?.error) toast("Couldn't start: " + (r.message || r.error)); else if (full) toast("Reading it fully…"); poll() },
+  readfull(id) { if (fullBlocked()) return toast(`Only ${crWord(crLeft())} left, kept for quick reads`); H.reprocess(id, "full") },
   async delete(id) { if (confirmDel !== id) { confirmDel = id; renderSheet(); return } await api.del("items", id); S.actions.forEach(a => { if (a.item_id === id) a.item_id = null }); S.sheet = null; await api.loadFocus(); refresh(); toast("Deleted") },
   ask() { S.ask = S.ask || {}; openSheet({ type: "ask" }); setTimeout(() => $("#aq")?.focus(), 50) },
   askq(id) { $("#aq").value = id; doAsk() },
@@ -1279,6 +1320,7 @@ const H = {
   async interest(id) { const cur = S.profile.interests || []; await api.profile({ interests: cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id], onboarded_at: S.profile.onboarded_at || now() }); render() },
   async commit() { const on = S.profile.commitment === "none"; await api.profile({ commitment: on ? "action_first" : "none" }); render(); toast(on ? "Gate on. It works once the iPhone automation is set up." : "Gate off") },
   async watch() { await api.profile({ watch_video: S.profile.watch_video === false }); render() },
+  async fullread() { await api.profile({ full_read: !S.profile.full_read }); render(); if (S.profile.full_read) toast("Every save now gets a full read: about 5–12 credits a reel") },
   async autorem() { await api.profile({ auto_remember: !S.profile.auto_remember }); render() },
   async capsetup() { S.newToken = ""; const { data } = await sb.from("capture_tokens").select("id,name,created_at,last_used_at").is("revoked_at", null).order("created_at", { ascending: false }); S.tokens = data || []; openSheet({ type: "capsetup" }) },
   async newtoken() {
@@ -1391,6 +1433,7 @@ const incoming = { save: [params.get("url"), params.get("text"), params.get("sav
 try { if (location.search || history.state?.gsdSheet) history.replaceState(null, "", location.pathname) } catch {} // a reload with a sheet open leaves its history entry behind
 async function start() {
   try { await api.load() } catch (e) { S.screen = "error"; S.error = e.message || String(e); return render() }
+  api.loadCredits().then(() => S.screen === "app" && refresh()).catch(() => {});
   if (!S.profile) { S.screen = "error"; S.error = "Your profile wasn't created. Sign out and try again."; return render() }
   S.screen = "app"; S.tab = !S.profile.onboarded_at && !S.items.length ? "profile" : "now";
   let seen = true; try { seen = localStorage.getItem("gsd_rules") === "1"; localStorage.setItem("gsd_rules", "1") } catch {}

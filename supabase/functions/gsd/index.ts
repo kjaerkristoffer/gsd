@@ -1,7 +1,8 @@
 // GSD backend: one Edge Function with routes.
 //   POST /gsd/capture      user token or capture token   save a link, note or image (lane: now | next | library)
 //   POST /gsd/worker       internal secret               run the pipeline (read -> understand -> find links)
-//   POST /gsd/reprocess    user token                    re-read one item
+//   POST /gsd/reprocess    user token                    re-read one item ({ full: true } reads it fully)
+//   POST /gsd/credits      user token                    Supadata transcript credits: balance and this month's spend
 //   POST /gsd/ask          user token                    answer from the library with sources
 //   POST /gsd/suggest      user token                    two new actions for an item (optional steer)
 //   GET  /gsd/gate-check   capture token                 should the gate page open? (?app=instagram)
@@ -145,7 +146,11 @@ async function alive(url: string) {
 // ---------- providers ----------
 // Every call to the transcript service is noted in `diag`, so a save that comes back empty says why.
 // The service allows only a few requests per second, so a rate-limit answer is waited out and retried.
-async function sd(path: string, diag: string[] | null, label: string, body?: unknown) {
+// Credits: `cost` is what the docs say the call costs (metadata, captions and scrape 1; watching 5 a minute, at least 5;
+// transcribing 2 a minute; job status checks and /me nothing). The service's own x-billable-requests header wins when sent.
+// Charged calls add up on diag.credits, which the worker books against the save, the person's day and the account balance.
+type Diag = string[] & { credits?: number };
+async function sd(path: string, diag: Diag | null, label: string, body?: unknown, cost = 0) {
   for (let attempt = 0; ; attempt++) {
     const r = await fetch(`https://api.supadata.ai/v1${path}`, {
       method: body ? "POST" : "GET", signal: AbortSignal.timeout(110000),
@@ -155,17 +160,54 @@ async function sd(path: string, diag: string[] | null, label: string, body?: unk
     const rate = r.status === 429 && /rate/i.test(String(b?.details ?? b?.message ?? ""));
     if (rate && attempt < 5) { await sleep(1500 * (attempt + 1)); continue; }
     const why = b?.error ?? b?.message ?? b?.status ?? "";
+    const billed = r.headers.get("x-billable-requests");
+    const charged = [200, 202, 206].includes(r.status) ? (billed !== null && Number.isFinite(Number(billed)) ? Number(billed) : cost) : 0;
     if (diag) {
-      diag.push(`${label} ${r.status}${why ? " " + String(typeof why === "string" ? why : JSON.stringify(why)).slice(0, 80) : ""}`);
-      console.log("supadata", label, r.status, String(JSON.stringify(b)).slice(0, 300));
+      if (charged > 0) diag.credits = (diag.credits ?? 0) + charged;
+      diag.push(`${label} ${r.status}${why ? " " + String(typeof why === "string" ? why : JSON.stringify(why)).slice(0, 80) : ""}${charged ? ` (${charged} cr)` : ""}`);
+      console.log("supadata", label, r.status, `billed=${billed}`, String(JSON.stringify(b)).slice(0, 300));
     }
     const said = (diag ?? [`${label} ${r.status} ${String(b?.details ?? why).slice(0, 80)}`]).join("; ");
     if (r.status === 401 || b?.error === "unauthorized") throw new Fail("reader_not_configured", said);
     if (rate || r.status >= 500) throw new Fail("provider_down", said, true);
-    if (r.status === 402 || r.status === 429 || b?.error === "limit-exceeded" || b?.error === "upgrade-required") throw new Fail("reader_limit", said);
+    if (r.status === 402 || r.status === 429 || b?.error === "limit-exceeded" || b?.error === "upgrade-required") {
+      // Out of credits: the cached balance says so at once, so full reads stop and the app shows it.
+      if (r.status === 402 || b?.error === "limit-exceeded") {
+        try {
+          const { data: a } = await admin.from("provider_account").select("max_credits").eq("provider", "supadata").maybeSingle();
+          if (a?.max_credits) await admin.from("provider_account").update({ used_credits: a.max_credits }).eq("provider", "supadata");
+        } catch { /* the next check with Supadata corrects it */ }
+      }
+      throw new Fail("reader_limit", said);
+    }
     return { status: r.status, body: b };
   }
 }
+// The account's real balance from Supadata (GET /v1/me), cached in provider_account. Between checks the worker adds each
+// run's credits to the cache (note_credits), so it stays close to true; it is re-checked after ACCOUNT_TTL, and sooner when
+// it says nothing is left (the plan may have renewed). Checking costs no credits (measured: two calls in a row, same usedCredits).
+type Account = { plan: string | null; used_credits: number; max_credits: number; checked_at: string };
+const ACCOUNT_TTL = 2 * 60000;
+const RESERVE = 10; // credits a full read never touches, so quick reads keep working until the plan renews
+async function refreshAccount(): Promise<Account | null> {
+  if (!SUPADATA) return null;
+  try {
+    const r = await sd("/me", null, "me");
+    if (r.status !== 200 || typeof r.body?.maxCredits !== "number") return null;
+    const row = { provider: "supadata", plan: String(r.body.plan ?? "") || null, used_credits: Math.round(r.body.usedCredits ?? 0), max_credits: Math.round(r.body.maxCredits), checked_at: new Date().toISOString() };
+    await admin.from("provider_account").upsert(row);
+    return row;
+  } catch (e) { console.log("supadata me failed", (e as Error)?.message); return null; }
+}
+async function account(maxAge = ACCOUNT_TTL): Promise<Account | null> {
+  const { data } = await admin.from("provider_account").select("plan,used_credits,max_credits,checked_at").eq("provider", "supadata").maybeSingle();
+  const age = data ? Date.now() - new Date(data.checked_at).getTime() : Infinity;
+  if (data && age < maxAge && !(creditsLeft(data) <= 0 && age > 5 * 60000)) return data;
+  return (await refreshAccount()) ?? data ?? null;
+}
+const creditsLeft = (a: Account | null) => a && a.max_credits > 0 ? Math.max(0, a.max_credits - a.used_credits) : Infinity;
+const watchCost = (secs: number) => 5 * Math.max(1, Math.ceil(secs / 60));
+const transcribeCost = (secs: number) => 2 * Math.max(1, Math.ceil(secs / 60));
 async function oai(path: string, body: unknown) {
   if (!OPENAI) throw new Fail("ai_not_configured", "OPENAI_API_KEY is not set");
   const r = await fetch("https://api.openai.com/v1" + path, {
@@ -319,6 +361,20 @@ const cleanAction = (a: any) => ({
 const R_MODE: Record<string, string> = { article: "learn", book: "learn", paper: "learn", podcast: "learn", video: "learn", course: "learn", person: "learn", tool: "build", repo: "build", film: "experience", show: "experience", place: "experience", product: "experience", music: "experience", other: "learn" };
 const R_LABEL: Record<string, string> = { article: "Read it", paper: "Read the paper", book: "See the book", film: "Where to watch", show: "Where to watch", podcast: "Play it", video: "Watch it", tool: "Open it", repo: "Open the repo", course: "Open the course", place: "Website", product: "See it", person: "Their page", music: "Play it", other: "Open it" };
 
+// ---------- transcript credits ----------
+// The balance for the You tab: Supadata's own numbers (re-checked when older than a minute) and what GSD spent this month.
+async function credits(req: Request, user: { id: string }) {
+  const a = await account(60000);
+  const month = today().slice(0, 7) + "-01";
+  const { data: days } = await admin.from("usage_daily").select("supadata_credits").eq("user_id", user.id).gte("day", month);
+  const { count } = await admin.from("items").select("id", { count: "exact", head: true }).eq("user_id", user.id).gt("supadata_credits", 0).gte("created_at", month);
+  return json(req, {
+    configured: !!SUPADATA, plan: a?.plan ?? null, used: a?.used_credits ?? null, max: a?.max_credits ?? null,
+    left: a && a.max_credits > 0 ? Math.max(0, a.max_credits - a.used_credits) : null, checked_at: a?.checked_at ?? null,
+    reserve: RESERVE, month_spent: (days ?? []).reduce((n: number, d: any) => n + (d.supadata_credits ?? 0), 0), month_saves: count ?? 0,
+  });
+}
+
 // ---------- capture ----------
 // Where a save goes: "now", "next" or the library. Taken from the body (lane: "Now" | "Up next" | "Library",
 // as an iPhone Shortcut menu sends it) or from a #now / #next tag in the text or note.
@@ -330,7 +386,10 @@ function laneOf(b: any): "now" | "next" | "" {
   const t = `${b.text ?? ""} ${b.note ?? ""}`;
   return /(^|\s)#now\b/i.test(t) ? "now" : /(^|\s)#(up)?next\b/i.test(t) ? "next" : "";
 }
-const stripLaneTag = (t: string) => t.replace(/(^|\s)#(now|next|upnext)\b/gi, " ").replace(/\s+/g, " ").trim();
+const stripLaneTag = (t: string) => t.replace(/(^|\s)#(now|next|upnext|full)\b/gi, " ").replace(/\s+/g, " ").trim();
+// A full read (watching and transcribing, which cost more transcript credits): { full: true }, { read: "Full" } from a
+// Shortcut menu, or a #full tag in the text or note. Otherwise a save is read the cheap way.
+const fullOf = (b: any) => b.full === true || /^(full|deep|yes|true)/i.test(String(b.read ?? "")) || /(^|\s)#full\b/i.test(`${b.text ?? ""} ${b.note ?? ""}`);
 // Put the save in its lane. The database enforces the caps (3 in Now, 5 in Up next) and picks the slot.
 // When Now is full it goes to the front of Up next; when that is full too, it stays in the library.
 async function placeLane(userId: string, id: string, want: "now" | "next" | "") {
@@ -354,7 +413,7 @@ async function folderOf(userId: string, v: unknown): Promise<string | null> {
 async function capture(req: Request, user: { id: string }) {
   const b = await req.json().catch(() => ({}));
   const via = ["app", "shortcut", "share_target", "bookmarklet", "api"].includes(b.via) ? b.via : "api";
-  const want = laneOf(b);
+  const want = laneOf(b), full = fullOf(b);
   if (typeof b.text === "string") b.text = stripLaneTag(b.text);
   const note = stripLaneTag(String(b.note ?? "")).slice(0, 500);
   const folderId = await folderOf(user.id, b.folder);
@@ -390,16 +449,19 @@ async function capture(req: Request, user: { id: string }) {
   }
   const c = canonical(link);
   if (!c) return json(req, { error: "invalid_url" }, 400);
-  const { data: ex } = await admin.from("items").select("id,title,note,status,resaved_count,lane").eq("user_id", user.id).eq("canonical_url", c.url).maybeSingle();
+  const { data: ex } = await admin.from("items").select("id,title,note,status,resaved_count,lane,deep_read").eq("user_id", user.id).eq("canonical_url", c.url).maybeSingle();
   if (ex) {
     await admin.from("items").update({
       resaved_count: ex.resaved_count + 1, last_saved_at: new Date().toISOString(),
       note: note && !ex.note.includes(note) ? [ex.note, note].filter(Boolean).join("\n") : ex.note,
       ...(ex.status === "let_go" ? { status: "inbox", let_go_at: null } : {}), ...pinned,
+      // Saved again asking for a full read: read it again, fully.
+      ...(full && !ex.deep_read ? { deep_read: true, ...reread() } : {}),
     }).eq("id", ex.id);
+    if (full && !ex.deep_read) await admin.rpc("call_internal", { path: "worker" });
     return done(ex.id, true, ex.title, ex.lane);
   }
-  const { data, error } = await admin.from("items").insert({ user_id: user.id, url: link, canonical_url: c.url, source: c.source, start_seconds: c.start, via, note, title: String(b.title ?? "").slice(0, 200) || (c.source === "maps" ? "Place" : c.url), ...pinned }).select("id").single();
+  const { data, error } = await admin.from("items").insert({ user_id: user.id, url: link, canonical_url: c.url, source: c.source, start_seconds: c.start, via, note, deep_read: full, title: String(b.title ?? "").slice(0, 200) || (c.source === "maps" ? "Place" : c.url), ...pinned }).select("id").single();
   if (error) return json(req, { error: "db", message: error.message }, 500);
   return done(data.id, false);
 }
@@ -418,19 +480,23 @@ function segmentsOf(body: any): [number, string][] {
   return Array.isArray(c) ? c.filter((s: any) => s?.text).map((s: any) => [Number(s.offset) || 0, String(s.text)]) : [];
 }
 async function stage(id: string, patch: Record<string, unknown>) { await admin.from("items").update(patch).eq("id", id); }
+// The fields that put a save back in the queue to be read from scratch.
+const reread = () => ({ stage: "queued", attempts: 0, error_code: null, diag: null, provider_job: null, enrich_state: "none", locked_until: null, next_attempt_at: new Date().toISOString() });
 
 // Watching: the service looks at the frames of a short clip and reports on-screen text and what is shown.
 const WATCH_SCHEMA = { type: "object", required: ["on_screen_text", "things_shown", "visual_summary"], properties: {
   on_screen_text: { type: "array", items: { type: "string" }, description: "Every distinct piece of text shown on screen, in order: titles, headlines, names, lists, URLs, handles, prices. No duplicates, no subtitles of the speech." },
   things_shown: { type: "array", items: { type: "object", required: ["name", "detail"], properties: { name: { type: "string" }, detail: { type: "string" } } }, description: "Specific articles, books, apps, websites, products, places, dishes or people that are visible or named on screen, with what is shown about each." },
-  visual_summary: { type: "string", description: "What is shown or demonstrated that the audio alone would not tell you. Two to four sentences." } } };
-async function startWatch(url: string, diag: string[]): Promise<string | null> {
+  visual_summary: { type: "string", description: "What is shown or demonstrated that the audio alone would not tell you. Two to four sentences." },
+  speech: { type: "string", description: "What is said aloud, as close to word for word as you can. Empty if nothing is said." } } };
+async function startWatch(url: string, diag: Diag, secs: number): Promise<string | null> {
   try {
-    const r = await sd("/extract", diag, "watch", { url, prompt: "Watch this short video. Report the text that appears on screen and what is shown. Be exact with names, titles and URLs.", schema: WATCH_SCHEMA });
+    const r = await sd("/extract", diag, "watch", { url, prompt: "Watch this short video. Report the text that appears on screen and what is shown. Be exact with names, titles and URLs.", schema: WATCH_SCHEMA }, watchCost(secs));
     return r.body?.jobId ?? null;
-  } catch (e) { diag.push("watch not started"); if (e instanceof Fail && e.code === "reader_not_configured") throw e; return null; }
+  } catch (e) { diag.push("watch not started"); if (e instanceof Fail && (e.code === "reader_not_configured" || e.code === "reader_limit")) throw e; return null; }
 }
-async function finishWatch(jobId: string, diag: string[], deadline: number): Promise<string> {
+// With `hear`, the speech the watcher heard is kept too (for clips the platform has no captions for).
+async function finishWatch(jobId: string, diag: Diag, deadline: number, hear = false): Promise<string> {
   let lastErr = "";
   while (Date.now() < deadline) {
     await sleep(3000);
@@ -444,8 +510,9 @@ async function finishWatch(jobId: string, diag: string[], deadline: number): Pro
       if (list(d.on_screen_text).length) out.push("ON SCREEN (text shown in the video):\n" + list(d.on_screen_text).map((x) => `- ${String(x)}`).join("\n"));
       if (list(d.things_shown).length) out.push("SHOWN IN THE VIDEO:\n" + list(d.things_shown).map((x: any) => `- ${x.name}: ${x.detail}`).join("\n"));
       if (d.visual_summary) out.push(`WHAT IS SHOWN: ${d.visual_summary}`);
+      if (hear && String(d.speech ?? "").trim().length > 20) out.push(`${HEARD}\n${String(d.speech).trim()}`);
       diag.push("watch done");
-      return out.join("\n\n").slice(0, 6000);
+      return out.join("\n\n").slice(0, 12000);
     }
     if (st === "failed" || r.status === 404) {
       console.log("supadata watch result", r.status, String(JSON.stringify(r.body)).slice(0, 300));
@@ -457,73 +524,115 @@ async function finishWatch(jobId: string, diag: string[], deadline: number): Pro
   return "";
 }
 
-async function fetchVideo(item: any, profile: any, diag: string[]): Promise<Src | "waiting"> {
-  const url = providerUrl(item);
+// Supadata credits are scarce (about 100 a month), so a video is read on a ladder, cheapest first.
+//   Quick read (the default)
+//     YouTube    free: oEmbed (title, channel, cover); 1 credit: its captions (nearly every video has at least auto captions).
+//                No metadata call: the captions carry the length. (Its public watch page would say more for free, but it answers
+//                Supabase's servers with a bot check, so it isn't used.)
+//     Instagram  1 credit: metadata (caption, length, video or photos); 1 credit: captions the platform already has.
+//   Full read (asked for per save: items.deep_read, on capture or "Read it fully" later; or always: profiles.full_read)
+//     + watches clips up to 3 minutes (5 credits a minute, at least 5): on-screen text, and the speech when there are no captions;
+//     + only if nothing was heard yet, transcribes the audio (2 credits a minute, within the length and daily limits).
+//   A full read never spends the last RESERVE credits, and once the account is empty every read carries on with what is free.
+const HEARD = "WHAT IS SAID (heard while watching the clip):";
+const isFull = (item: any, profile: any) => !!(item.deep_read || profile?.full_read);
+async function fetchVideo(item: any, profile: any, diag: Diag): Promise<Src | "waiting"> {
+  const url = providerUrl(item), enc = encodeURIComponent(url);
   const s = blank(); s.type = "video";
   const job = item.provider_job;
-  let watchId: string | null = job?.watch_id ?? null;
+  const full = isFull(item, profile);
+  let watchId: string | null = job?.watch_id ?? null, watched = !!job?.watched;
   const began = Date.now();
+  // Paid steps go through `paid`: once Supadata says the credits are gone, the rest are skipped and the read uses what is free.
+  const acct = SUPADATA ? await account() : null;
+  const room = () => creditsLeft(acct) - (diag.credits ?? 0);
+  let broke = false;
+  const paid = async <T>(f: () => Promise<T>): Promise<T | null> => {
+    if (broke) return null;
+    try { return await f(); }
+    catch (e) { if (e instanceof Fail && e.code === "reader_limit") { broke = true; diag.push("out of transcript credits"); return null; } throw e; }
+  };
   if (!SUPADATA) diag.push("no transcript key set");
+  else if (room() <= 0) { broke = true; diag.push("out of transcript credits"); }
   if (job?.meta) Object.assign(s, job.meta);
   else {
+    diag.push(full ? "full read" : "quick read");
     if (item.source === "youtube") {
       try {
-        const o = await (await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(8000) })).json();
+        const o = await (await fetch(`https://www.youtube.com/oembed?format=json&url=${enc}`, { signal: AbortSignal.timeout(8000) })).json();
         s.title = o.title ?? ""; s.author = o.author_name ?? ""; s.thumb = o.thumbnail_url ?? "";
       } catch { /* optional */ }
     }
-    if (SUPADATA) {
-      const m = await sd(`/metadata?url=${encodeURIComponent(url)}`, diag, "metadata");
-      if (m.status === 200) {
+    if (SUPADATA && (item.source !== "youtube" || !s.title || (full && s.duration == null))) {
+      const m = await paid(() => sd(`/metadata?url=${enc}`, diag, "metadata", undefined, 1));
+      if (m?.status === 200) {
         const b = m.body;
-        s.type = b.type ?? "video"; s.title ||= b.title ?? ""; s.caption = b.description ?? "";
+        s.type = b.type ?? "video"; s.title ||= b.title ?? ""; s.caption = b.description || s.caption;
         s.author ||= b.author?.displayName ?? b.author?.username ?? "";
-        s.duration = b.media?.duration ?? null;
+        s.duration = b.media?.duration ?? s.duration;
         s.thumb ||= b.media?.thumbnailUrl ?? (b.type === "image" ? b.media?.url : b.media?.items?.[0]?.thumbnailUrl ?? b.media?.items?.[0]?.url) ?? "";
         if (b.type === "image" && b.media?.url) s.images = [b.media.url];
         if (b.type === "carousel") s.images = (b.media?.items ?? []).map((i: any) => i.url ?? i.thumbnailUrl).filter(Boolean).slice(0, 4);
       }
-      // Short clips are also watched, so on-screen titles and lists are not missed.
-      const secs = s.duration ?? (item.source === "youtube" ? 99999 : 90);
-      if (s.type === "video" && secs <= 180 && profile?.watch_video !== false) watchId = await startWatch(url, diag);
     }
   }
   if (SUPADATA && s.type === "video") {
-    const enc = encodeURIComponent(url);
-    const meta = { title: s.title, author: s.author, thumb: s.thumb, duration: s.duration, type: s.type, caption: s.caption };
+    // A transcript that runs as a job (the service does that past 20 minutes, or while it transcribes) is picked up on a later run.
     const wait = async (jobId: string, started: string) => {
-      await stage(item.id, { provider_job: { id: jobId, started_at: started, meta, watch_id: watchId }, next_attempt_at: new Date(Date.now() + 15000).toISOString(), locked_until: null, attempts: Math.max(0, item.attempts - 1), diag: diag.join("; ") });
+      const meta = { title: s.title, author: s.author, thumb: s.thumb, duration: s.duration, type: s.type, caption: s.caption, visual: s.visual };
+      await stage(item.id, { provider_job: { id: jobId, started_at: started, meta, watch_id: watchId, watched }, next_attempt_at: new Date(Date.now() + 15000).toISOString(), locked_until: null, attempts: Math.max(0, item.attempts - 1), diag: diag.join("; ") });
       return "waiting" as const;
     };
-    let t: { status: number; body: any } | null = null;
     if (job?.id) {
-      t = await sd(`/transcript/${job.id}`, diag, "transcript-job");
-      const st = t.body?.status;
+      const t = await paid(() => sd(`/transcript/${job.id}`, diag, "transcript-job"));
+      const st = t?.body?.status;
       if (st === "queued" || st === "active") {
         if (Date.now() - new Date(job.started_at).getTime() < 20 * 60000) return wait(job.id, job.started_at);
-        t = null;
-      } else if (st === "failed" || t.status === 404) t = null;
+      } else if (t && st !== "failed" && t.status !== 404) s.segments = segmentsOf(t.body);
     } else {
-      // Short clips: let the service listen to the audio when there are no captions.
-      // Unknown length is treated as short for everything except YouTube.
-      const mins = Math.ceil((s.duration ?? (item.source === "youtube" ? 99999 : 120)) / 60);
-      let mode = "native";
-      if (mins <= (profile?.transcribe_minutes ?? 10)) {
-        const { data: used } = await admin.rpc("bump_usage", { p_user: item.user_id, p_day: today(), p_field: "transcribe_minutes", p_amount: mins });
-        if ((used ?? 0) <= 60) mode = "auto";
-      }
-      t = await sd(`/transcript?url=${enc}&text=false&mode=${mode}`, diag, `transcript(${mode})`);
-      if (t.status === 202 && t.body?.jobId) return wait(t.body.jobId, new Date().toISOString());
+      // Step 1, every read: the captions the platform already has (1 credit, also when it turns out there are none).
+      const t = await paid(() => sd(`/transcript?url=${enc}&text=false&mode=native`, diag, "captions", undefined, 1));
+      if (t?.status === 202 && t.body?.jobId) { s.duration ??= 1201; return wait(t.body.jobId, new Date().toISOString()); }
+      if (t) s.segments = segmentsOf(t.body);
     }
-    if (t) s.segments = segmentsOf(t.body);
+    // The captions tell the length when nothing else did.
+    const lastSeg = s.segments.at(-1);
+    if (s.duration == null && lastSeg && lastSeg[0] > 0) s.duration = lastSeg[0] / 1000 + 5;
+    if (full && !broke) {
+      // Unknown length is treated as short for Instagram (reels), long for YouTube.
+      const secs = s.duration ?? (item.source === "youtube" ? 99999 : 90);
+      const left = () => Number.isFinite(room()) ? `${Math.max(0, room())} credits left` : "";
+      // Step 2: watch a short clip for on-screen text, and for the speech when there are no captions.
+      if (!watched && profile?.watch_video !== false) {
+        if (secs > 180) diag.push("too long to watch");
+        else if (watchCost(secs) > room() - RESERVE) diag.push(`not watched, ${left()}`);
+        else { watched = true; watchId = await paid(() => startWatch(url, diag, secs)); }
+      }
+      if (watchId) { s.visual = await finishWatch(watchId, diag, Math.max(Date.now() + 10000, began + 60000), !s.segments.length); watchId = null; }
+      // Step 3, only when nothing was heard yet: transcribe the audio.
+      if (!s.segments.length && !s.visual.includes(HEARD) && !job?.id && !broke) {
+        const mins = Math.max(1, Math.ceil(secs / 60));
+        if (mins > (profile?.transcribe_minutes ?? 10)) diag.push("too long to transcribe");
+        else if (transcribeCost(secs) > room() - RESERVE) diag.push(`not transcribed, ${left()}`);
+        else {
+          const { data: used } = await admin.rpc("bump_usage", { p_user: item.user_id, p_day: today(), p_field: "transcribe_minutes", p_amount: mins });
+          if ((used ?? 0) > 60) diag.push("daily transcribing used up");
+          else {
+            const g = await paid(() => sd(`/transcript?url=${enc}&text=false&mode=generate`, diag, "transcribe", undefined, transcribeCost(secs)));
+            if (g?.status === 202 && g.body?.jobId) return wait(g.body.jobId, new Date().toISOString());
+            if (g) s.segments = segmentsOf(g.body);
+          }
+        }
+      }
+    }
   }
   if (watchId) s.visual = await finishWatch(watchId, diag, Math.max(Date.now() + 10000, began + 60000));
-  if (!s.title && !s.caption.trim() && !s.segments.length && !s.images.length && !s.visual) throw new Fail("no_content", diag.join("; "));
+  if (!s.title && !s.caption.trim() && !s.segments.length && !s.images.length && !s.visual) throw new Fail(broke ? "reader_limit" : "no_content", diag.join("; "));
   s.quality = s.segments.length || s.visual ? "full" : (s.caption.trim().length > 40 || s.images.length ? "caption_only" : "title_only");
   return s;
 }
 
-async function fetchWeb(item: any, diag: string[]): Promise<Src> {
+async function fetchWeb(item: any, profile: any, diag: Diag): Promise<Src> {
   const s = blank();
   let finalUrl = item.url;
   try {
@@ -538,9 +647,13 @@ async function fetchWeb(item: any, diag: string[]): Promise<Src> {
     } else if (r.ok && !/html|text/.test(r.type)) throw new Fail("unsupported_type");
     else if (r.status === 404 || r.status === 410) throw new Fail("private_or_missing");
   } catch (e) { if (e instanceof Fail && e.code !== "unreadable") throw e; }
-  if (s.pageText.length < 600 && SUPADATA) {
-    const r = await sd(`/web/scrape?noLinks=true&url=${encodeURIComponent(finalUrl)}`, diag, "scrape");
-    if (r.status === 200 && r.body?.content) { s.pageText = String(r.body.content); s.title ||= r.body.name ?? ""; s.caption ||= r.body.description ?? ""; }
+  // The scraper (1 credit) renders pages our own fetch can't read. A quick read only uses it when the page gave almost nothing,
+  // and an empty account just means the page is read from what was free.
+  if (SUPADATA && s.pageText.length < (isFull(item, profile) ? 600 : 200) && creditsLeft(await account()) > 0) {
+    try {
+      const r = await sd(`/web/scrape?noLinks=true&url=${encodeURIComponent(finalUrl)}`, diag, "scrape", undefined, 1);
+      if (r.status === 200 && r.body?.content) { s.pageText = String(r.body.content); s.title ||= r.body.name ?? ""; s.caption ||= r.body.description ?? ""; }
+    } catch (e) { if (!(e instanceof Fail && e.code === "reader_limit")) throw e; diag.push("out of transcript credits"); }
   }
   if (s.pageText.length < 80 && !s.caption && !s.title) throw new Fail("unreadable", diag.join("; "));
   s.quality = s.pageText.length >= 600 ? "full" : s.pageText.length + s.caption.length > 80 ? "caption_only" : "title_only";
@@ -600,7 +713,7 @@ async function toDataUrl(url: string) {
 }
 
 // ---------- pass 1: read and understand ----------
-async function processItem(item: any, diag: string[]): Promise<void> {
+async function processItem(item: any, diag: Diag): Promise<void> {
   const { p: profile, folders, text: personText } = await person(item.user_id);
   let src = blank(); src.quality = "full";
   const parts: any[] = [];
@@ -638,7 +751,7 @@ async function processItem(item: any, diag: string[]): Promise<void> {
       if (v === "waiting") return;
       src = v;
     } else if (item.source === "maps") src = await fetchPlace(item, profile, diag);
-    else src = await fetchWeb(item, diag);
+    else src = await fetchWeb(item, profile, diag);
     for (const u of src.images) { try { const d = await toDataUrl(u); if (d) parts.push({ type: "input_image", image_url: d.dataUrl }); } catch { /* skip image */ } }
   }
 
@@ -782,7 +895,7 @@ async function runWorker() {
   if (error) return { error: error.message };
   const item = (items ?? [])[0];
   if (!item) return { processed: 0, failed: 0 };
-  const diag: string[] = [];
+  const diag: Diag = [];
   let failed = 0;
   try {
     if (item.stage === "ready") {
@@ -804,8 +917,12 @@ async function runWorker() {
         failed = 1;
       }
     }
-  } finally { await admin.rpc("call_internal", { path: "worker" }); }
-  return { processed: 1 - failed, failed };
+  } finally {
+    // Book the Supadata credits this run spent: on the save, the person's day and the cached account balance.
+    if (diag.credits) await admin.rpc("note_credits", { p_item: item.id, p_user: item.user_id, p_n: Math.round(diag.credits) }).then(() => {}, (e: unknown) => console.error("note_credits", e));
+    await admin.rpc("call_internal", { path: "worker" });
+  }
+  return { processed: 1 - failed, failed, credits: diag.credits ?? 0 };
 }
 
 // ---------- ask ----------
@@ -890,10 +1007,12 @@ Deno.serve(async (req) => {
     if (route === "gate-check") return await gateCheck(req, user);
     if (user.via !== "jwt") return json(req, { error: "forbidden" }, 403);
     if (route === "ask" && req.method === "POST") return await ask(req, user);
+    if (route === "credits" && req.method === "POST") return await credits(req, user);
     if (route === "suggest" && req.method === "POST") return await suggest(req, user);
     if (route === "reprocess" && req.method === "POST") {
       const b = await req.json().catch(() => ({}));
-      const { data } = await admin.from("items").update({ stage: "queued", attempts: 0, error_code: null, diag: null, provider_job: null, enrich_state: "none", locked_until: null, next_attempt_at: new Date().toISOString() }).eq("id", String(b.item_id ?? "")).eq("user_id", user.id).select("id");
+      // { full: true } is "Read fully": the same save read again with watching and transcribing.
+      const { data } = await admin.from("items").update({ ...reread(), ...(b.full === true ? { deep_read: true } : {}) }).eq("id", String(b.item_id ?? "")).eq("user_id", user.id).select("id");
       if (!data?.length) return json(req, { error: "not_found" }, 404);
       await admin.rpc("call_internal", { path: "worker" });
       return json(req, { ok: true });
