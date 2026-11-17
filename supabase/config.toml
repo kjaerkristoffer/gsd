@@ -1,0 +1,4 @@
+project_id = "dzyvmropxtvkdajzzkdw"
+
+[functions.gsd]
+verify_jwt = false
