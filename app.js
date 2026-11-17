@@ -42,7 +42,7 @@ const themePref = () => { try { return localStorage.getItem("gsd_theme") || "aut
 function applyTheme() {
   const p = themePref(), dark = p === "dark" || (p === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-  $("#themecolor")?.setAttribute("content", dark ? "#000000" : "#ffffff");
+  $("#themecolor")?.setAttribute("content", dark ? "#000000" : "#f2f2f5");
   if ($(".iv")) setThemeColor();
   return dark;
 }
@@ -50,7 +50,7 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { ap
 
 /* ---------- state ---------- */
 const S = { screen: "boot", user: null, profile: null, items: [], actions: [], cards: [], challenges: [], focus: null, tokens: [],
-  tab: "home", sheet: null, q: "", area: "", lib: "all", actTab: "doing", mode: "inspire", seen: new Set(), swapped: [], ask: null,
+  tab: "home", sheet: null, q: "", area: "", lib: "folders", folder: "", actTab: "doing", mode: "inspire", seen: new Set(), swapped: [], ask: null,
   authMode: "in", authMsg: "", busy: false, related: {}, more: false, newToken: "" };
 let sb = null, confirmDel = null;
 
@@ -176,8 +176,8 @@ function actRow(a, extra = "", here = false) {
 function gauge(pct) {
   const len = Math.PI * 100, off = len * (1 - pct / 100);
   return `<div class="gauge" role="img" aria-label="${pct} percent of the saves you kept have been acted on"><svg viewBox="0 0 240 132"><defs><linearGradient id="gg" x1="0" x2="1"><stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#0284c7"/></linearGradient></defs>
-  <path d="M20 122 A100 100 0 0 1 220 122" fill="none" stroke="var(--soft)" stroke-width="18" stroke-linecap="round"/>
-  ${pct > 0 ? `<path d="M20 122 A100 100 0 0 1 220 122" fill="none" stroke="url(#gg)" stroke-width="18" stroke-linecap="round" stroke-dasharray="${len}" stroke-dashoffset="${off}"/>` : ""}</svg>
+  <path d="M20 122 A100 100 0 0 1 220 122" fill="none" stroke="var(--track)" stroke-width="18" stroke-linecap="round"/>
+  ${pct > 0 ? `<path d="M20 122 A100 100 0 0 1 220 122" fill="none" class="arc" stroke="url(#gg)" stroke-width="18" stroke-linecap="round" stroke-dasharray="${len}" stroke-dashoffset="${off}"/>` : ""}</svg>
   <div class="n"><b>${pct}<span style="font-size:22px">%</span></b><small>GSD RATIO</small></div></div>`;
 }
 
@@ -201,20 +201,181 @@ function vHome() {
   <div class="sec"><div class="hd"><h2>Recently saved</h2><button class="small mute" data-act="tab" data-id="library">All</button></div>
     ${recent.length ? `<div class="grid">${recent.map(tile).join("")}</div>` : `<div class="card soft"><p class="mute">Nothing saved yet. Tap + and paste a link from Instagram, YouTube, TikTok or anywhere.</p></div>`}</div>`;
 }
+/* ---------- library folders: vanilla port of the glass-folder-cards component ----------
+   Back to front: a back panel holding generated liquid artwork, the saves inside as real sheets, and a frosted front
+   panel hinged on its bottom edge. Hover leans the glass, a tap opens it and fans the saves, the key goes into the folder.
+   The stage is drawn at 340 × 272 folder units and scaled by --k to whatever width the grid gives it. */
+const GF_ART = {
+  aurora: { style: "streak", colors: ["#f4efe9", "#e9c2b8", "#c2433f", "#2a1e2a", "#22395e", "#6f97c2", "#e5edf4"], scale: .7, warp: 1.4, angle: -.62, gloss: .18, veins: 0 },
+  ember: { style: "marble", colors: ["#07090c", "#16252c", "#3d5f68", "#1a1416", "#a3201a", "#ef4a2b", "#ff8a5c"], scale: .62, warp: 3.2, angle: -.5, gloss: .55, veins: .6 },
+  dusk: { style: "marble", colors: ["#120c18", "#3e2850", "#8f6c9c", "#2b1a24", "#b3502f", "#eab08a", "#fbe7d2"], scale: .75, warp: 3.6, angle: .8, gloss: .5, veins: .5 },
+  glacier: { style: "streak", colors: ["#f7f8fa", "#d9e2ea", "#9fb4c7", "#e8edf2", "#bccbd8", "#ffffff"], scale: .7, warp: 1.6, angle: .35, gloss: .25, veins: 0 },
+  verdant: { style: "marble", colors: ["#070b08", "#173024", "#4f7a5a", "#141812", "#a7843a", "#e9cf87", "#fbf3d6"], scale: .7, warp: 3.4, angle: 2.1, gloss: .5, veins: .5 },
+};
+const GF_PRESETS = Object.keys(GF_ART);
+const gfHex = h => { h = h.replace("#", ""); const n = parseInt(h, 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255] };
+function gfRng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296 } }
+const gfSeed = s => Math.floor(hash(s) * 4294967296);
+// Seeded gradient noise, summed into octaves with a rotation between each.
+function gfFbm(seed) {
+  const r = gfRng(seed), perm = new Uint8Array(512), grad = new Float32Array(512), p = [...Array(256).keys()];
+  for (let i = 255; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [p[i], p[j]] = [p[j], p[i]] }
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+  for (let i = 0; i < 256; i++) { const a = r() * Math.PI * 2; grad[i * 2] = Math.cos(a); grad[i * 2 + 1] = Math.sin(a) }
+  const noise = (x, y) => {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, X = xi & 255, Y = yi & 255;
+    const h00 = perm[X + perm[Y]] * 2, h10 = perm[X + 1 + perm[Y]] * 2, h01 = perm[X + perm[Y + 1]] * 2, h11 = perm[X + 1 + perm[Y + 1]] * 2;
+    const d00 = grad[h00] * xf + grad[h00 + 1] * yf, d10 = grad[h10] * (xf - 1) + grad[h10 + 1] * yf, d01 = grad[h01] * xf + grad[h01 + 1] * (yf - 1), d11 = grad[h11] * (xf - 1) + grad[h11 + 1] * (yf - 1);
+    const u = xf * xf * xf * (xf * (xf * 6 - 15) + 10), v = yf * yf * yf * (yf * (yf * 6 - 15) + 10);
+    return d00 + u * (d10 - d00) + v * (d01 - d00 + u * (d11 - d01 - d10 + d00));
+  };
+  return (x, y, oct) => { let s = 0, amp = .5; for (let i = 0; i < oct; i++) { s += amp * noise(x, y); const nx = 1.6 * x + 1.2 * y + 7.1; y = -1.2 * x + 1.6 * y + 3.3; x = nx; amp *= .5 } return s };
+}
+// The artwork as a job spread over frames: a field domain-warped twice, normalised by its own percentiles, then lit as a
+// liquid surface (slope → normal → diffuse + specular) with fine striations along the contours.
+function gfArtJob(w, h, rec, seed) {
+  w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
+  const stops = rec.colors.map((c, i) => ({ t: i / (rec.colors.length - 1), c: gfHex(c) }));
+  const { scale = .7, warp = 3, gloss = .4, veins = 0 } = rec, streak = rec.style === "streak", fbm = gfFbm(seed * 977 + 13), r = gfRng(seed + 1);
+  const ox = r() * 50, oy = r() * 50, ang = (rec.angle || 0) + (r() - .5) * .5, ca = Math.cos(ang), sa = Math.sin(ang), m = Math.min(w, h);
+  const gw = Math.ceil(w / 2) + 3, gh = Math.ceil(h / 2) + 3, G = new Float32Array(gw * gh), GQ = new Float32Array(gw * gh), F = new Float32Array(w * h), Q = new Float32Array(w * h);
+  const px8 = new Uint8ClampedArray(w * h * 4); let row = 0;
+  const field = gy => { for (let gx = 0; gx < gw; gx++) {
+    const u = ((gx - 1) * 2 - w / 2) / m, v = ((gy - 1) * 2 - h / 2) / m;
+    let px = (u * ca - v * sa) * scale, py = (u * sa + v * ca) * scale; if (streak) { px *= .14; py *= 2.2 } px += ox; py += oy;
+    const qx = fbm(px, py, 3), qy = fbm(px + 5.2, py + 1.3, 3), rx = fbm(px + warp * qx + 1.7, py + warp * qy + 9.2, 3), ry = fbm(px + warp * qx + 8.3, py + warp * qy + 2.8, 3);
+    G[gy * gw + gx] = fbm(px + warp * rx, py + warp * ry, 4); GQ[gy * gw + gx] = Math.sqrt(qx * qx + qy * qy) } };
+  const upsample = () => { // Catmull-Rom from the half-resolution grid keeps the slope continuous for the lighting
+    const cr = (a, b, c, d) => (-a + 9 * b + 9 * c - d) / 16, T = new Float32Array(w * gh);
+    for (let gy = 0; gy < gh; gy++) { const o = gy * gw; for (let x = 0; x < w; x++) { const c = (x >> 1) + 1; T[gy * w + x] = x & 1 ? cr(G[o + c - 1], G[o + c], G[o + c + 1], G[o + c + 2]) : G[o + c] } }
+    for (let y = 0; y < h; y++) { const c = (y >> 1) + 1; for (let x = 0; x < w; x++) {
+      F[y * w + x] = y & 1 ? cr(T[(c - 1) * w + x], T[c * w + x], T[(c + 1) * w + x], T[(c + 2) * w + x]) : T[c * w + x];
+      const gx = (x >> 1) + 1, q0 = GQ[c * gw + gx], qx = x & 1 ? (q0 + GQ[c * gw + gx + 1]) / 2 : q0;
+      const q1 = y & 1 ? (x & 1 ? (GQ[(c + 1) * gw + gx] + GQ[(c + 1) * gw + gx + 1]) / 2 : GQ[(c + 1) * gw + gx]) : qx; Q[y * w + x] = (qx + q1) / 2 } } };
+  const colorize = () => {
+    const smp = [], st = Math.max(1, Math.floor(F.length / 4096)); for (let i = 0; i < F.length; i += st) smp.push(F[i]); smp.sort((a, b) => a - b);
+    const lo = smp[Math.floor(smp.length * .02)], hi = smp[Math.floor(smp.length * .98)], k = 1 / (hi - lo || 1), lx = -.55, ly = -.65, lz = .52, slope = k * m * .012;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x; let t = Math.min(1, Math.max(0, (F[i] - lo) * k)), j = 1;
+      while (j < stops.length - 1 && stops[j].t < t) j++;
+      const a = stops[j - 1], b = stops[j]; let f = Math.min(1, Math.max(0, (t - a.t) / (b.t - a.t || 1))); f = f * f * (3 - 2 * f);
+      const gx = (F[x < w - 1 ? i + 1 : i] - F[x > 0 ? i - 1 : i]) * slope, gy = (F[y < h - 1 ? i + w : i] - F[y > 0 ? i - w : i]) * slope;
+      const nd = (-gx * lx - gy * ly + lz) / Math.sqrt(gx * gx + gy * gy + 1), spec = Math.pow(nd > 0 ? nd : 0, 24) * gloss * 255;
+      const lit = (.82 + .28 * nd) * (1 + .035 * Math.sin(t * 150 + Q[i] * 24)) * (1 - veins * Math.max(0, 1 - Math.abs(Q[i] - .42) * 14) * .6);
+      for (let ch = 0; ch < 3; ch++) px8[i * 4 + ch] = (a.c[ch] + (b.c[ch] - a.c[ch]) * f) * lit + spec;
+      px8[i * 4 + 3] = 255 } };
+  return { w, h, px: px8, step(rows) { if (row >= gh) return true; const end = Math.min(gh, row + rows); while (row < end) field(row++); if (row < gh) return false; upsample(); colorize(); return true } };
+}
+// One shared painter: every folder queues its art here and the queue spends ~7ms a frame, so a row of folders never janks.
+const GF_DONE = new Map(), GF_WAIT = new Map(), GF_Q = []; let gfPumping = false;
+function gfPump() {
+  if (gfPumping) return; gfPumping = true;
+  const tick = () => { const until = performance.now() + 7;
+    while (GF_Q.length && performance.now() < until) { const j = GF_Q[0]; if (!j.job.step(4)) continue; GF_Q.shift();
+      const c = document.createElement("canvas"); c.width = j.job.w; c.height = j.job.h; c.getContext("2d").putImageData(new ImageData(j.job.px, c.width, c.height), 0, 0);
+      j.fin(c) }
+    if (GF_Q.length) requestAnimationFrame(tick); else gfPumping = false };
+  requestAnimationFrame(tick);
+}
+// Finished art is also kept as a small JPEG between visits (newest 16), so a folder only ever paints once per size.
+const gfStore = (() => { try { return JSON.parse(localStorage.getItem("gsd_art") || "{}") } catch { return {} } })();
+function gfKeep(key, c) { try { gfStore[key] = c.toDataURL("image/jpeg", .86); const ks = Object.keys(gfStore); ks.slice(0, Math.max(0, ks.length - 16)).forEach(k => delete gfStore[k]); localStorage.setItem("gsd_art", JSON.stringify(gfStore)) } catch {} }
+function gfPaint(preset, seed, w, h, done) {
+  const key = [preset, seed, w, h].join("|"), got = GF_DONE.get(key); if (got) return done(got, true);
+  if (!GF_WAIT.has(key)) { GF_WAIT.set(key, []);
+    const fin = c => { GF_DONE.set(key, c); (GF_WAIT.get(key) || []).forEach(f => f(c)); GF_WAIT.delete(key) };
+    const paint = () => { GF_Q.push({ key, job: gfArtJob(w, h, GF_ART[preset], seed), fin: c => { fin(c); gfKeep(key, c) } }); gfPump() };
+    if (gfStore[key]) { const im = new Image(); im.onload = () => fin(im); im.onerror = paint; im.src = gfStore[key] } else paint() }
+  GF_WAIT.get(key).push(c => done(c, false));
+}
+const GF_BACK = "M0 56A22 22 0 0 1 22 34L146 34C170 34 172 0 198 0L318 0A22 22 0 0 1 340 22L340 250A22 22 0 0 1 318 272L22 272A22 22 0 0 1 0 250Z";
+const GF_FRONT = "M0 22A22 22 0 0 1 22 0L118 0C144 0 146 32 172 32L318 32A22 22 0 0 1 340 54L340 176A22 22 0 0 1 318 198L22 198A22 22 0 0 1 0 176Z";
+const gfSlot = (i, n) => n <= 1 ? 0 : (i / (n - 1)) * 2 - 1;
+const gfSeen = new Set(); // folders that have already assembled themselves once this session
+function gfFolders() {
+  const by = new Map(); for (const it of live()) { if (!by.has(it.area)) by.set(it.area, []); by.get(it.area).push(it) }
+  const used = {}, art = {};
+  for (const a of [...by.keys()].map(a => a || "Unsorted").sort()) { const s = Math.floor(hash("gf:" + a) * GF_PRESETS.length);
+    const p = [...GF_PRESETS.keys()].map(d => GF_PRESETS[(s + d) % GF_PRESETS.length]).reduce((b, p) => (used[p] || 0) < (used[b] || 0) ? p : b); used[p] = (used[p] || 0) + 1; art[a] = p }
+  return [...by.entries()].map(([area, items]) => ({ area: area || "Unsorted", art: art[area || "Unsorted"], items: items.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)) }))
+    .sort((a, b) => (b.area === "Wisdom") - (a.area === "Wisdom") || b.items.length - a.items.length || a.area.localeCompare(b.area));
+}
+function gfSheet(it, v, n) {
+  const r = gfRng(gfSeed(it.id)), src = thumbUrl(it), name = pending(it) ? "Reading…" : it.title || hostOf(it.url) || "Untitled";
+  const style = `--gf-slot:${gfSlot(v, n)};--gf-depth:${n - 1 - v};--gf-jx:${((r() - .5) * 10).toFixed(2)}px;--gf-jr:${((r() - .5) * 3.2).toFixed(2)}deg;z-index:${v + 1}`;
+  return `<div role="listitem" class="gf-slot"><button class="gf-sheet${src ? " gf-sheet--art" : ""}" style="${style}" data-act="open" data-id="${it.id}">
+    ${src ? `<img class="gf-sheet-art" src="${esc(src)}" alt="" loading="lazy" draggable="false" onerror="this.parentNode.classList.remove('gf-sheet--art');this.remove()">` : ""}
+    <span class="gf-paper" aria-hidden="true"><span class="gf-em">${KIND[it.kind] || "✨"}</span>${esc(it.insight || it.summary || it.title || it.url || "")}</span>
+    <span class="gf-sheet-head"><span class="gf-sheet-name">${esc(name)}</span><span class="gf-sheet-meta">${esc(ago(it.created_at))}</span></span></button></div>`;
+}
+function gfFolder(f, i) {
+  const n = f.items.length, show = f.items.slice(0, 4).reverse(), preset = f.art, open = S.folder === f.area;
+  const label = `${n} save${n === 1 ? "" : "s"}`;
+  return `<div class="gf" data-act="gfopen" data-id="${esc(f.area)}" data-key="${esc(f.area)}" style="--d:${i * 110}ms"${open ? " data-open" : ""}${gfSeen.has(f.area) ? " data-entered" : ""}>
+  <div class="gf-stage"><div class="gf-tilt">
+    <div class="gf-shadow" aria-hidden="true"></div>
+    <div class="gf-back" style="clip-path:path('${GF_BACK}')" aria-hidden="true"><canvas class="gf-art" data-art="${preset}" data-seed="${gfSeed(f.area) % 997}"></canvas><div class="gf-back-sheen"></div></div>
+    <svg class="gf-rim gf-back-rim" viewBox="0 0 340 272" aria-hidden="true"><path d="${GF_BACK}"/></svg>
+    <div class="gf-front" style="clip-path:path('${GF_FRONT}')">
+      <div class="gf-tint" aria-hidden="true"></div><div class="gf-spec" aria-hidden="true"></div>
+      <svg class="gf-rim gf-front-rim" viewBox="0 0 340 198" aria-hidden="true"><path d="${GF_FRONT}" stroke="url(#gf-rim)"/></svg>
+      <button class="gf-hit" data-act="gfopen" data-id="${esc(f.area)}" aria-expanded="${open}" aria-label="${open ? "Close" : "Open"} ${esc(f.area)}, ${label}"></button>
+      <div class="gf-label"><span class="gf-title">${f.area === "Wisdom" ? "💎 " : ""}${esc(f.area)}</span><span class="gf-meta">${label}</span></div>
+    </div>
+    <div class="gf-files" role="list" aria-label="Latest in ${esc(f.area)}"${open ? "" : " inert"}>${show.map((it, v) => gfSheet(it, v, show.length)).join("")}</div>
+    <button class="gf-key" data-act="area" data-id="${esc(f.area)}" aria-label="Show all ${label} in ${esc(f.area)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M12.5 6l6 6-6 6"/></svg></button>
+  </div></div></div>`;
+}
+let gfRO = null, gfIO = null;
+function gfMount() {
+  gfRO?.disconnect(); gfIO?.disconnect();
+  const els = [...document.querySelectorAll(".gf")]; if (!els.length) return;
+  const dpr = Math.min(1.5, Math.max(1, devicePixelRatio || 1));
+  // Size: --k scales the 340-unit stage to the column. Resize observers run after layout and before paint, so nothing flashes.
+  gfRO = new ResizeObserver(es => es.forEach(e => { const el = e.target, k = el.clientWidth / 340; if (!k) return;
+    el.style.setProperty("--k", k.toFixed(4));
+    const step = Math.max(.5, Math.round(k * dpr * 4) / 4), cv = el.querySelector(".gf-art"); // paint in quarter steps, so a resize doesn't repaint every pixel
+    if (cv.dataset.step === String(step)) return; cv.dataset.step = step;
+    gfPaint(cv.dataset.art, +cv.dataset.seed, 364 * step, 296 * step, (src, now) => { if (!cv.isConnected || cv.dataset.step !== String(step)) return;
+      cv.width = src.width; cv.height = src.height; cv.getContext("2d").drawImage(src, 0, 0); if (now) cv.classList.add("now"); cv.dataset.ready = "" }) }));
+  // Entrance: each folder assembles itself the first time it scrolls into view, staggered along the row.
+  gfIO = "IntersectionObserver" in window ? new IntersectionObserver(es => es.forEach(e => { if (!e.isIntersecting) return; gfIO.unobserve(e.target);
+    const el = e.target; setTimeout(() => { el.setAttribute("data-entered", ""); gfSeen.add(el.dataset.key) }, parseInt(el.style.getPropertyValue("--d")) || 0) }), { threshold: .25 }) : null;
+  for (const el of els) {
+    gfRO.observe(el);
+    if (!el.hasAttribute("data-entered")) gfIO ? gfIO.observe(el) : (el.setAttribute("data-entered", ""), gfSeen.add(el.dataset.key));
+    // Light and parallax follow the pointer; written once a frame, never re-rendered.
+    let raf = 0, px = 0, py = 0; const write = () => { raf = 0; el.style.setProperty("--gf-px", px.toFixed(3)); el.style.setProperty("--gf-py", py.toFixed(3)) };
+    el.addEventListener("pointermove", e => { if (e.pointerType === "touch") return; const r = el.getBoundingClientRect(); px = (e.clientX - r.left) / r.width * 2 - 1; py = (e.clientY - r.top) / r.height * 2 - 1; raf ||= requestAnimationFrame(write) });
+    el.addEventListener("pointerleave", () => { px = py = 0; raf ||= requestAnimationFrame(write) });
+  }
+}
+// Open one folder at a time without re-rendering, so the glass and the fan animate.
+function gfSet(area) {
+  S.folder = area;
+  document.querySelectorAll(".gf").forEach(el => { const on = el.dataset.key === area, hit = el.querySelector(".gf-hit"), n = el.querySelector(".gf-meta").textContent;
+    el.toggleAttribute("data-open", on); el.querySelector(".gf-files").toggleAttribute("inert", !on);
+    hit.setAttribute("aria-expanded", on); hit.setAttribute("aria-label", `${on ? "Close" : "Open"} ${el.dataset.key}, ${n}`) });
+}
+document.addEventListener("pointerdown", e => { if (S.folder && !e.target.closest(".gf[data-open]")) gfSet("") });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && S.folder && !S.sheet) { const k = S.folder; gfSet(""); [...document.querySelectorAll(".gf")].find(el => el.dataset.key === k)?.querySelector(".gf-hit").focus() } });
+
 function libList() {
   const q = S.q.toLowerCase().trim();
+  if (S.lib === "folders" && !S.area && !q) { const fs = gfFolders();
+    return fs.length ? `<div class="folders">${fs.map(gfFolder).join("")}</div>` : `<div class="card soft"><p class="mute">Nothing saved yet. Tap + and paste a link from Instagram, YouTube, TikTok or anywhere. Your saves sort themselves into folders here.</p></div>` }
   let l = S.lib === "inbox" ? S.items.filter(i => i.status === "inbox") : S.lib === "let_go" ? S.items.filter(i => i.status === "let_go") : live();
   if (S.area) l = l.filter(i => i.area === S.area);
   if (q) l = l.filter(i => [i.title, i.summary, i.note, i.source, i.area, ...(i.tags || []), ...(i.takeaways || []).map(t => t.text)].join(" ").toLowerCase().includes(q));
   return l.length ? `<div class="grid">${l.map(tile).join("")}</div>` : `<p class="mute" style="padding:30px 0;text-align:center">${q ? "Nothing matches. Try Ask for questions in your own words." : "Nothing here."}</p>`;
 }
 function vLibrary() {
-  const areas = [...new Set(live().map(i => i.area))].sort((a, b) => (b === "Wisdom") - (a === "Wisdom") || a.localeCompare(b));
+  const n = S.area ? live().filter(i => i.area === S.area).length : 0;
   return `<h1>Library</h1>
-  <div class="sec"><input class="field" id="q" type="search" placeholder="Search your saves" value="${esc(S.q)}" aria-label="Search your saves"></div>
-  <div class="scroll" style="margin-top:12px">${[["all", "All"], ["inbox", "Unsorted"], ["let_go", "Let go"]].map(([k, n]) => `<button class="chip ${S.lib === k && !S.area ? "on" : ""}" data-act="lib" data-id="${k}">${n}</button>`).join("")}
-    ${areas.map(t => `<button class="chip ${S.area === t ? "on" : ""}" data-act="area" data-id="${esc(t)}">${t === "Wisdom" ? "💎 " : ""}${esc(t)}</button>`).join("")}</div>
-  <div class="sec" id="libgrid">${libList()}</div>`;
+  <div class="sec"><input class="field search" id="q" type="search" placeholder="Search your saves" value="${esc(S.q)}" aria-label="Search your saves"></div>
+  <div class="scroll" style="margin-top:12px">${[["folders", "🗂️ Folders"], ["all", "All"], ["inbox", "Unsorted"], ["let_go", "Let go"]].map(([k, t]) => `<button class="chip ${S.lib === k && !S.area ? "on" : ""}" data-act="lib" data-id="${k}">${t}</button>`).join("")}</div>
+  ${S.area ? `<div class="crumb sec"><button class="chip" data-act="lib" data-id="folders" aria-label="Back to folders">←</button><h2>${S.area === "Wisdom" ? "💎 " : ""}${esc(S.area)}</h2><span class="small mute">${n} save${n === 1 ? "" : "s"}</span></div>` : ""}
+  <div class="${S.area ? "" : "sec"}" id="libgrid" style="${S.area ? "margin-top:14px" : ""}">${libList()}</div>`;
 }
 function feed() {
   const ready = live().filter(i => i.stage === "ready");
@@ -363,7 +524,7 @@ function sheetHtml() {
       <li>Request Body <b>JSON</b>: <code>text</code> = Shortcut Input, <code>via</code> = <code>shortcut</code>.</li>
       <li>Add <b>Show Notification</b>: “Saved to GSD”.</li></ol>
     ${S.tokens.length ? `<div class="sec"><h3>Tokens</h3><div class="stack" style="margin-top:8px;gap:8px">${S.tokens.map(t => `<div class="row small" style="justify-content:space-between"><span>${esc(t.name)} · created ${ago(t.created_at)}${t.last_used_at ? " · used " + ago(t.last_used_at) : ""}</span><button class="chip" data-act="revoke" data-id="${t.id}">Revoke</button></div>`).join("")}</div></div>` : ""}` }
-  return `<div class="overlay" data-act="backdrop"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div><button class="x" data-act="close" aria-label="Close">✕</button>${b}</div></div>`;
+  return `<div class="overlay" data-act="backdrop" data-type="${s.type}"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div><button class="x" data-act="close" aria-label="Close">✕</button>${b}</div></div>`;
 }
 /* ---------- item view: ambient colour, floating media card, liquid-glass sheet ---------- */
 const IC = {
@@ -407,7 +568,7 @@ function tintFor(it) {
 const fallbackTint = it => hslToRgb(Math.round(hash(it.id) * 360), .36, .44);
 function setThemeColor() {
   const iv = $(".iv"), m = $("#themecolor"); if (!m) return;
-  if (!iv) return m.setAttribute("content", document.documentElement.dataset.theme === "dark" ? "#000000" : "#ffffff");
+  if (!iv) return m.setAttribute("content", document.documentElement.dataset.theme === "dark" ? "#000000" : "#f2f2f5");
   const dark = document.documentElement.dataset.theme === "dark", [r, g, b] = getComputedStyle(iv).getPropertyValue("--tint").split(",").map(Number);
   const mix = v => Math.round(dark ? v * .6 : (v + 255) / 2); // what the wash over the ambient ends up looking like at the very top
   m.setAttribute("content", `rgb(${mix(r)},${mix(g)},${mix(b)})`);
@@ -557,13 +718,18 @@ function render() {
     <main><div class="top"><div class="logo"><i></i>GSD</div><button class="chip" data-act="theme" data-id="flip" aria-label="Switch between light and dark mode" style="margin-left:auto">${document.documentElement.dataset.theme === "dark" ? "☀️ Light" : "🌙 Dark"}</button></div>${view}</main>
     <nav class="tabs" aria-label="Main">${TABS.slice(0, 2).map(tabBtn).join("")}<button class="plus" data-act="save" aria-label="Save something">+</button>${TABS.slice(2).map(tabBtn).join("")}</nav></div>`;
   if (S.tab === "explore") watchFeed();
+  if (S.tab === "library") gfMount();
+  if (S.tab !== lastTab) { lastTab = S.tab; $("main")?.classList.add("enter") } // only a change of tab animates in; re-renders stay put
 }
+let lastTab = "";
 function renderSheet() {
   const host = $("#sheet"), prev = host.firstElementChild;
   // Re-rendering the same open save (polling, a toggle, related saves arriving) keeps its scroll, skips the entrance and keeps what you're typing.
   const same = S.sheet?.type === "item" && prev?.classList.contains("iv") && prev.dataset.id === S.sheet.id, top = same ? $("#ivs")?.scrollTop || 0 : 0;
   const ae = document.activeElement, keep = same && ae?.id && host.contains(ae) && /^(TEXTAREA|INPUT)$/.test(ae.tagName) ? { id: ae.id, v: ae.value, a: ae.selectionStart, b: ae.selectionEnd } : null;
+  const sameSheet = prev?.classList.contains("overlay") && prev.dataset.type === S.sheet?.type; // a re-render of the same sheet must not slide in again
   ivStatic = same; host.innerHTML = sheetHtml(); ivStatic = false;
+  if (sameSheet) host.firstElementChild?.classList.add("static");
   document.body.style.overflow = S.sheet ? "hidden" : "";
   if (S.sheet?.type === "item") ivMount(same, top);
   if (keep) { const el = document.getElementById(keep.id); if (el) { el.value = keep.v; el.focus({ preventScroll: true }); try { el.setSelectionRange(keep.a, keep.b) } catch {} } }
@@ -611,7 +777,7 @@ function fileToJpeg(file) {
 
 /* ---------- actions ---------- */
 const H = {
-  tab(id) { S.tab = id; S.sheet = null; refresh(); scrollTo(0, 0) },
+  tab(id) { S.tab = id; S.sheet = null; S.folder = ""; refresh(); scrollTo(0, 0) },
   save() { openSheet({ type: "save" }); setTimeout(() => $("#sv")?.focus(), 50) },
   close() {
     const iv = $(".iv");
@@ -688,7 +854,8 @@ const H = {
   async delete(id) { if (confirmDel !== id) { confirmDel = id; renderSheet(); return } await api.del("items", id); S.actions.forEach(a => { if (a.item_id === id) a.item_id = null }); S.sheet = null; refresh(); toast("Deleted") },
   ask() { S.ask = S.ask || {}; openSheet({ type: "ask" }); setTimeout(() => $("#aq")?.focus(), 50) },
   askq(id) { $("#aq").value = id; doAsk() },
-  lib(id) { S.lib = id; S.area = ""; render() }, area(id) { S.area = S.area === id ? "" : id; S.lib = "all"; render() },
+  lib(id) { S.lib = id; S.area = ""; S.folder = ""; render() }, area(id) { S.area = S.area === id ? "" : id; S.lib = "all"; S.folder = ""; render(); scrollTo({ top: 0, behavior: "smooth" }) },
+  gfopen(id) { gfSet(S.folder === id ? "" : id) },
   mode(id) { S.mode = id; render() }, acttab(id) { S.actTab = id; render() }, more() { S.more = true; render() },
   async makeact(id) { const a = S.actions.find(x => x.item_id === id && x.status === "suggested"); if (a) H.start(a.id); else H.open(id) },
   newch() { openSheet({ type: "newch" }) },
@@ -746,7 +913,7 @@ document.addEventListener("submit", async e => {
     if (!r.data.session) { S.authMsg = "Check your email to confirm your address, then sign in here."; S.authOk = true; S.authMode = "in"; render(); return }
     S.user = r.data.user; start() }
 });
-document.addEventListener("input", e => { if (e.target.id === "q") { S.q = e.target.value; $("#libgrid").innerHTML = libList() } });
+document.addEventListener("input", e => { if (e.target.id === "q") { S.q = e.target.value; $("#libgrid").innerHTML = libList(); gfMount() } });
 document.addEventListener("change", async e => {
   const t = e.target;
   if (t.id === "img" && t.files[0]) { try { const b64 = await fileToJpeg(t.files[0]); saveThing({ image_base64: b64, note: $("#sn")?.value.trim() || "" }) } catch { toast("Couldn't read that image") } }
