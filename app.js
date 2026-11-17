@@ -43,6 +43,7 @@ function applyTheme() {
   const p = themePref(), dark = p === "dark" || (p === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
   $("#themecolor")?.setAttribute("content", dark ? "#000000" : "#ffffff");
+  if ($(".iv")) setThemeColor();
   return dark;
 }
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { applyTheme(); if (S.screen === "app") render() });
@@ -157,8 +158,8 @@ function focusAction() {
 /* ---------- pieces ---------- */
 const thumb = (it, cls = "thumb") => `<div class="${cls}">${KIND[it.kind] || "✨"}${thumbUrl(it) ? `<img src="${esc(thumbUrl(it))}" alt="" loading="lazy" onerror="this.remove()">` : ""}</div>`;
 const tile = it => `<button class="tile" data-act="open" data-id="${it.id}">${thumb(it)}<div class="tx"><div class="t">${pending(it) ? '<span class="spin"></span> Reading…' : esc(it.title || it.url || "Untitled")}</div><div class="tiny">${esc(it.source || "")} · ${ago(it.created_at)}</div></div></button>`;
-function actRow(a, extra = "") {
-  const it = item(a.item_id), m = MODE[a.mode] || MODE.grow;
+function actRow(a, extra = "", here = false) {
+  const it = here ? null : item(a.item_id), m = MODE[a.mode] || MODE.grow; // here: shown inside its own save, so no "from" line or Source button
   return `<div class="card"><div class="act"><div class="em" aria-hidden="true">${m[0]}</div><div class="bd">
     <h3>${esc(a.title)}</h3><div class="small mute">${a.minutes} min · ${m[1]}${it ? ` · from “${esc((it.title || "").slice(0, 40))}”` : ""}</div>
     ${a.why && a.status !== "done" ? `<p class="small" style="margin-top:8px">${esc(a.why)}</p>` : ""}
@@ -306,13 +307,13 @@ function vProfile() {
 /* ---------- sheets ---------- */
 function sheetHtml() {
   const s = S.sheet; if (!s) return "";
+  if (s.type === "item") return itemView(item(s.id));
   let b = "";
   if (s.type === "save") b = `<h2>Save <em>anything</em></h2><p class="small mute" style="margin-top:4px">Paste a link, or write a note, quote or idea.</p>
     <label class="l" for="sv">Link or text</label><textarea class="field" id="sv" placeholder="https://www.instagram.com/reel/…">${esc(s.val || "")}</textarea>
     <label class="l" for="sn">Why are you saving it? (optional)</label><input class="field" id="sn" placeholder="e.g. try this at the weekend">
     <div class="row" style="margin-top:16px"><button class="btn" data-act="dosave" ${S.busy ? "disabled" : ""}>Save</button>
     <label class="btn ghost" style="cursor:pointer">🖼️ Add image<input type="file" id="img" accept="image/*" hidden></label><button class="btn ghost" data-act="close">Cancel</button></div>`;
-  if (s.type === "item") b = itemSheet(item(s.id));
   if (s.type === "triage") { const it = inbox()[0];
     b = it ? `<div class="tiny">${inbox().length} to sort</div>${thumb(it, "thumb hero")}<h2>${esc(it.title)}</h2><p class="mute" style="margin-top:8px">${esc(it.insight || it.summary || "")}</p>
       <div class="row" style="margin-top:18px"><button class="btn keep" style="flex:1" data-act="keep" data-id="${it.id}">💚 Keep</button><button class="btn drop" style="flex:1" data-act="letgo" data-id="${it.id}">🗑️ Let go</button></div>
@@ -364,52 +365,176 @@ function sheetHtml() {
     ${S.tokens.length ? `<div class="sec"><h3>Tokens</h3><div class="stack" style="margin-top:8px;gap:8px">${S.tokens.map(t => `<div class="row small" style="justify-content:space-between"><span>${esc(t.name)} · created ${ago(t.created_at)}${t.last_used_at ? " · used " + ago(t.last_used_at) : ""}</span><button class="chip" data-act="revoke" data-id="${t.id}">Revoke</button></div>`).join("")}</div></div>` : ""}` }
   return `<div class="overlay" data-act="backdrop"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div><button class="x" data-act="close" aria-label="Close">✕</button>${b}</div></div>`;
 }
-function itemSheet(it) {
-  if (!it) return "<p>This save is gone.</p>";
-  const acts = S.actions.filter(a => a.item_id === it.id && a.status !== "dismissed").sort((x, y) => (x.resource_idx ?? 99) - (y.resource_idx ?? 99)), e = it.entities || {}, u = safeUrl(it.url), rel = S.related[it.id];
-  if (pending(it)) return `${thumb(it, "thumb hero")}<h2><span class="spin"></span> Reading it…</h2><p class="mute" style="margin-top:6px;word-break:break-all">${esc(it.url || it.title || "")}</p><p class="small mute" style="margin-top:10px">Usually under a minute; GSD listens to it, watches short clips and then looks up what was mentioned. You can close this.</p>`;
-  const t = s => { const m = Math.floor(s / 60), x = String(s % 60).padStart(2, "0"); return `${m}:${x}` };
-  return `${thumb(it, "thumb hero")}
-    <div class="tiny">${KIND[it.kind] || ""} ${esc(it.kind)} · ${esc(it.source || "")}${it.author ? " · " + esc(it.author) : ""} · saved ${ago(it.created_at)}${it.resaved_count ? ` · saved ${it.resaved_count + 1} times` : ""}</div>
-    <h2 style="margin-top:6px">${esc(it.title || "Untitled")}</h2>
-    <div class="chips" style="margin-top:10px"><span class="chip b">${esc(it.area)}</span>${(it.tags || []).map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div>
-    ${it.stage === "failed" ? `<div class="banner" style="margin-top:14px;background:var(--red-bg);color:var(--red)">${esc(ERR[it.error_code] || "Something went wrong reading this.")}${it.diag ? `<br><span class="tiny" style="color:inherit;opacity:.8">Details: ${esc(it.diag)}</span>` : ""}</div>`
-      : it.quality === "caption_only" ? `<p class="tiny" style="margin-top:10px">Read from the caption only.</p>` : it.quality === "title_only" ? `<p class="tiny" style="margin-top:10px">Only the title was readable.</p>` : ""}
-    ${it.summary ? `<p style="margin-top:14px;white-space:pre-wrap">${esc(it.summary)}</p>` : ""}
-    ${it.takeaways?.length ? `<ul class="tk">${it.takeaways.map(k => `<li>${esc(k.text)}${k.t != null && it.source === "youtube" && u ? ` <a class="chip" style="padding:2px 8px" target="_blank" rel="noopener noreferrer" href="${esc(u + (u.includes("?") ? "&" : "?") + "t=" + k.t + "s")}">${t(k.t)}</a>` : ""}</li>`).join("")}</ul>` : ""}
-    ${(it.quotes || []).map(q => `<blockquote>${esc(q)}</blockquote>`).join("")}
-    ${e.place?.name ? (() => { const q = encodeURIComponent([e.place.name, e.place.address, e.place.city].filter(Boolean).join(" ")), site = safeUrl(e.place.website) || safeUrl((it.resources || []).find(r => r.type === "place" && r.url)?.url);
-      return `<div class="card soft" style="margin-top:14px"><h3>📍 ${esc(e.place.name)}</h3><p class="small mute">${esc([e.place.category, e.place.address, e.place.city].filter(Boolean).join(" · "))}</p>
-      ${e.place.known_for ? `<p class="small" style="margin-top:6px">${esc(e.place.known_for)}</p>` : ""}
-      <div class="row" style="margin-top:10px">${it.source === "maps" && u ? `<a class="btn sm" target="_blank" rel="noopener noreferrer" href="${esc(u)}">Open the map ↗</a>` : `<a class="btn sm" target="_blank" rel="noopener noreferrer" href="https://www.google.com/maps/search/?api=1&query=${q}">Google Maps ↗</a>`}
-      <a class="btn sm line" target="_blank" rel="noopener noreferrer" href="https://maps.apple.com/?q=${q}">Apple Maps ↗</a>
-      ${site ? `<a class="btn sm line" target="_blank" rel="noopener noreferrer" href="${esc(site)}">Website ↗</a>` : ""}</div></div>` })() : ""}
-    ${e.recipe?.ingredients?.length ? `<div class="card soft" style="margin-top:14px"><div class="row" style="justify-content:space-between"><h3>🍽️ Ingredients</h3><button class="chip" data-act="copy" data-id="${esc(e.recipe.ingredients.join("\n"))}">Copy list</button></div><ul class="tk small">${e.recipe.ingredients.map(x => `<li>${esc(x)}</li>`).join("")}</ul>${e.recipe.steps?.length ? `<h3 style="margin-top:12px">Steps</h3><ol class="small" style="padding-left:20px;margin:6px 0 0">${e.recipe.steps.map(x => `<li style="margin:4px 0">${esc(x)}</li>`).join("")}</ol>` : ""}</div>` : ""}
-    ${e.book?.title ? `<div class="card soft" style="margin-top:14px"><h3>📖 ${esc(e.book.title)}</h3><p class="small mute">${esc(e.book.author || "")}</p></div>` : ""}
-    ${e.tool?.name ? `<div class="card soft" style="margin-top:14px"><h3>🛠️ ${esc(e.tool.name)}</h3><p class="small mute">${esc(e.tool.what_for || "")}</p>${safeUrl(e.tool.url) ? `<a class="btn sm line" style="margin-top:10px" target="_blank" rel="noopener noreferrer" href="${esc(safeUrl(e.tool.url))}">Open</a>` : ""}</div>` : ""}
-    ${e.workout?.exercises?.length ? `<div class="card soft" style="margin-top:14px"><h3>🏃 Workout</h3><ul class="tk small">${e.workout.exercises.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
-    ${e.event?.name ? `<div class="card soft" style="margin-top:14px"><h3>🎟️ ${esc(e.event.name)}</h3><p class="small mute">${esc([e.event.date, e.event.place].filter(Boolean).join(" · "))}</p></div>` : ""}
-    ${(it.resources || []).length ? `<div class="sec"><div class="hd"><h2>Mentioned</h2>${it.enrich_state === "pending" ? `<span class="tiny"><span class="spin"></span> Finding the links…</span>` : ""}</div>
-      <div class="stack" style="gap:10px">${it.resources.map(r => { const ru = safeUrl(r.url);
-        return `<div class="card soft" style="padding:14px"><div class="act"><div class="em" aria-hidden="true">${RES[r.type] || "✨"}</div><div class="bd">
-          <h3>${esc(r.title)}</h3><div class="small mute">${esc([r.type, r.creator].filter(Boolean).join(" · "))}</div>
-          ${r.about ? `<p class="small" style="margin-top:6px">${esc(r.about)}</p>` : ""}${r.note ? `<p class="tiny" style="margin-top:4px">${esc(r.note)}</p>` : ""}
-          <div class="row" style="margin-top:10px">${ru ? `<a class="btn sm" target="_blank" rel="noopener noreferrer" href="${esc(ru)}">${RES_LABEL[r.type] || "Open it"} ↗</a>`
-            : it.enrich_state === "pending" ? "" : `<a class="btn sm line" target="_blank" rel="noopener noreferrer" href="https://www.google.com/search?q=${encodeURIComponent(r.search_hint || [r.title, r.creator].join(" "))}">Search for it ↗</a>`}</div>
-        </div></div></div>` }).join("")}</div></div>` : ""}
-    <div class="sec"><div class="hd"><h2>Do something with it</h2><button class="small mute" data-act="ownact" data-id="${it.id}">+ Your own</button></div>
-      <div class="stack">${acts.length ? acts.map(a => actRow(a)).join("") : `<p class="small mute">No actions yet.</p>`}</div>
-      ${it.stage === "ready" ? `<form data-form="steer" data-id="${it.id}" class="row" style="margin-top:12px"><input class="field" id="steer" style="flex:1;min-width:160px" placeholder="Different ideas… (optional: “outdoors”, “shorter”)" aria-label="Steer new ideas"><button class="btn sm ghost" ${S.busy ? "disabled" : ""}>${S.busy ? '<span class="spin"></span>' : "Different ideas"}</button></form>` : ""}</div>
-    ${rel?.length ? `<div class="sec"><div class="hd"><h2>Related saves</h2></div><div class="grid">${rel.map(tile).join("")}</div></div>` : ""}
-    <div class="sec"><label class="l" for="note" style="margin-top:0">Your note</label><textarea class="field" id="note" data-note="${it.id}" placeholder="Why it matters to you">${esc(it.note || "")}</textarea></div>
-    <div class="sec row">
-      ${u ? `<a class="btn sm line" href="${esc(u)}" target="_blank" rel="noopener noreferrer">Open original ↗</a>` : ""}
-      ${S.cards.some(c => c.item_id === it.id) ? `<button class="btn sm ${it.remember ? "" : "ghost"}" data-act="remember" data-id="${it.id}">🧠 ${it.remember ? "Remembering" : "Help me remember"}</button>` : ""}
-      ${it.status !== "kept" ? `<button class="btn sm keep" data-act="keep" data-id="${it.id}">💚 Keep</button>` : ""}
-      ${it.status !== "let_go" ? `<button class="btn sm drop" data-act="letgo" data-id="${it.id}">Let go</button>` : ""}
-      ${it.area === "Wisdom" && it.source === "note" ? "" : `<button class="btn sm ghost" data-act="reprocess" data-id="${it.id}">Re-read</button>`}
-      <button class="btn sm ghost" data-act="delete" data-id="${it.id}">${confirmDel === it.id ? "Tap again to delete forever" : "Delete"}</button></div>`;
+/* ---------- item view: ambient colour, floating media card, liquid-glass sheet ---------- */
+const IC = {
+  back: '<svg class="ch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
+  x: '<svg class="x-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  more: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4.8c0-.4.4-.8.8-.8h4.4c.4 0 .8.4.8.8V7M6 7l1 12.2c.1 1 .9 1.8 1.9 1.8h6.2c1 0 1.8-.8 1.9-1.8L18 7M10 11v6M14 11v6"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 12.5h8M8 16h5"/></svg>',
+  cam: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.3" cy="6.7" r="1.1" fill="#fff" stroke="none"/></svg>',
+};
+const SRC = { instagram: ["Instagram", IC.cam], youtube: ["YouTube", IC.play], tiktok: ["TikTok", "♪"], x: ["X", "𝕏"], facebook: ["Facebook", "f"], reddit: ["Reddit", "👽"],
+  maps: ["Maps", "📍"], note: ["Your note", "📝"], image: ["Your image", "🖼️"], web: ["", "🌐"] };
+const cap1 = s => s ? s[0].toUpperCase() + s.slice(1) : "";
+const tagLabel = t => cap1(String(t).replace(/[-_]+/g, " "));
+const hostOf = u => { try { return new URL(u).hostname.replace(/^www\./, "") } catch { return "" } };
+
+/* colour: sample the thumbnail once, keep a calm version of its dominant hue */
+function rgbToHsl(r, g, b) { r /= 255; g /= 255; b /= 255; const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn; if (!d) return [0, 0, l];
+  const s = l > .5 ? d / (2 - mx - mn) : d / (mx + mn), h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return [h * 60, s, l] }
+function hslToRgb(h, s, l) { const k = n => (n + h / 30) % 12, a = s * Math.min(l, 1 - l), f = n => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1)))); return `${f(0)},${f(8)},${f(4)}` }
+const TINT = (() => { try { return new Map(Object.entries(JSON.parse(localStorage.getItem("gsd_tints") || "{}"))) } catch { return new Map() } })();
+function tintFor(it) {
+  const key = it.thumb_path; if (!key) return Promise.resolve(null);
+  if (TINT.has(key)) return Promise.resolve(TINT.get(key));
+  return new Promise(res => {
+    const im = new Image(); im.crossOrigin = "anonymous";
+    im.onload = () => { try {
+      const n = 24, c = document.createElement("canvas"); c.width = c.height = n;
+      const x = c.getContext("2d", { willReadFrequently: true }); x.drawImage(im, 0, 0, n, n);
+      const d = x.getImageData(0, 0, n, n).data; let r = 0, g = 0, b = 0, w = 0;
+      for (let i = 0; i < d.length; i += 4) { // favour colourful mid-tones over greys, blacks and blown highlights
+        const [, s, l] = rgbToHsl(d[i], d[i + 1], d[i + 2]), k = .04 + s * s * Math.max(0, 1 - Math.abs(l - .5) * 1.7);
+        r += d[i] * k; g += d[i + 1] * k; b += d[i + 2] * k; w += k }
+      const [h, s, l] = rgbToHsl(r / w, g / w, b / w), t = hslToRgb(h, Math.min(s, .55), Math.min(Math.max(l, .32), .52));
+      TINT.set(key, t); try { localStorage.setItem("gsd_tints", JSON.stringify(Object.fromEntries([...TINT].slice(-300)))) } catch {}
+      res(t) } catch { res(null) } };
+    im.onerror = () => res(null); im.src = thumbUrl(it);
+  });
 }
+const fallbackTint = it => hslToRgb(Math.round(hash(it.id) * 360), .36, .44);
+function setThemeColor() {
+  const iv = $(".iv"), m = $("#themecolor"); if (!m) return;
+  if (!iv) return m.setAttribute("content", document.documentElement.dataset.theme === "dark" ? "#000000" : "#ffffff");
+  const dark = document.documentElement.dataset.theme === "dark", [r, g, b] = getComputedStyle(iv).getPropertyValue("--tint").split(",").map(Number);
+  const mix = v => Math.round(dark ? v * .6 : (v + 255) / 2); // what the wash over the ambient ends up looking like at the very top
+  m.setAttribute("content", `rgb(${mix(r)},${mix(g)},${mix(b)})`);
+}
+// Fill the frame when the picture's shape is close to it, otherwise show all of it over a blurred copy.
+function fitPic(img) { const box = img.parentElement; if (!box || !img.naturalWidth || !box.clientHeight) return;
+  box.classList.toggle("fit", Math.abs(Math.log((img.naturalWidth / img.naturalHeight) / (box.clientWidth / box.clientHeight))) > .6) }
+addEventListener("resize", () => document.querySelectorAll(".iv-pic img").forEach(fitPic));
+
+function ivMedia(it) {
+  const u = safeUrl(it.url), img = thumbUrl(it), [sname, sico] = SRC[it.source] || SRC.web, host = hostOf(u);
+  const who = it.author ? `${it.author}${sname ? " on " + sname : ""}` : sname || host || "Saved";
+  const sub = host || (it.source === "note" ? "Written by you" : "Saved " + ago(it.created_at));
+  const pic = img ? `<div class="iv-pic" style="--img:url('${esc(img)}')"><img src="${esc(img)}" alt="" onload="fitPic(this)" onerror="this.parentNode.classList.add('none');this.parentNode.insertAdjacentHTML('beforeend','<span class=big>${KIND[it.kind] || "✨"}</span>');this.remove()">
+      ${it.kind === "video" && u ? `<span class="iv-play lg warp" aria-hidden="true">${IC.play}</span>` : ""}</div>`
+    : `<div class="iv-pic txt"><span class="big" aria-hidden="true">${KIND[it.kind] || "✨"}</span><p>${esc(pending(it) ? (u || "Reading…") : it.insight || it.summary || it.title || "")}</p></div>`;
+  const capt = img && !pending(it) ? it.insight : "";
+  const inner = `${pic}<div class="iv-cap">${capt ? `<p class="iv-capt">${esc(capt)}</p>` : ""}
+    <div class="iv-src"${capt ? "" : ' style="margin-top:0"'}><span class="iv-ico ${esc(it.source || "web")}" aria-hidden="true">${sico}</span><div><b>${esc(who)}</b><span>${esc(sub)}</span></div>${u ? `<span class="go" aria-hidden="true">↗</span>` : ""}</div></div>`;
+  return u ? `<a class="iv-card" href="${esc(u)}" target="_blank" rel="noopener noreferrer" aria-label="Open the original${sname ? " on " + esc(sname) : ""}">${inner}</a>` : `<div class="iv-card">${inner}</div>`;
+}
+function ivMenu(it) {
+  const u = safeUrl(it.url);
+  return `<div class="iv-catch" data-act="menuclose"></div><div class="iv-menu lg" role="menu">
+    ${u ? `<a role="menuitem" href="${esc(u)}" target="_blank" rel="noopener noreferrer" data-act="menuclose"><span aria-hidden="true">↗</span>Open original</a>
+      <button role="menuitem" data-act="copy" data-id="${esc(u)}"><span aria-hidden="true">🔗</span>Copy link</button>` : ""}
+    ${it.status !== "kept" ? `<button role="menuitem" data-act="keep" data-id="${it.id}"><span aria-hidden="true">💚</span>Keep</button>` : ""}
+    ${S.cards.some(c => c.item_id === it.id) ? `<button role="menuitem" data-act="remember" data-id="${it.id}"><span aria-hidden="true">🧠</span>${it.remember ? "Stop remembering" : "Help me remember"}</button>` : ""}
+    ${it.area === "Wisdom" && it.source === "note" ? "" : `<button role="menuitem" data-act="reprocess" data-id="${it.id}"><span aria-hidden="true">🔄</span>Re-read</button>`}
+    ${it.status !== "let_go" ? `<button role="menuitem" data-act="letgo" data-id="${it.id}"><span aria-hidden="true">🍃</span>Let go</button>` : ""}</div>`;
+}
+function ivHead(it) {
+  const del = confirmDel === it.id;
+  return `<div class="iv-head">
+    <div class="iv-kind"><span aria-hidden="true">${KIND[it.kind] || "✨"}</span>${pending(it) ? "Reading" : esc(cap1(it.kind) || "Save")}</div>
+    ${it.area && !pending(it) ? `<button class="iv-area lgb" data-act="ivarea" data-id="${esc(it.area)}" title="Everything in ${esc(it.area)}">${it.area === "Wisdom" ? "💎 " : ""}${esc(it.area)}</button>` : "<span></span>"}
+    <div class="iv-tools">
+      <button class="iv-ic lgb" data-act="ivmenu" aria-label="More options" aria-haspopup="menu" aria-expanded="${!!S.sheet.menu}">${IC.more}</button>
+      <button class="iv-ic del lgb${del ? " on" : ""}" data-act="delete" data-id="${it.id}" aria-label="${del ? "Tap again to delete forever" : "Delete"}">${IC.trash}${del ? "<span>Delete?</span>" : ""}</button>
+      ${S.sheet.menu ? ivMenu(it) : ""}</div></div>`;
+}
+function resCard(r, it) {
+  const ru = safeUrl(r.url), finding = !ru && it.enrich_state === "pending";
+  const href = ru || (finding ? "" : `https://www.google.com/search?q=${encodeURIComponent(r.search_hint || [r.title, r.creator].filter(Boolean).join(" "))}`);
+  const inner = `<h4>${esc(r.title)}</h4>${r.about ? `<p>${esc(r.about)}</p>` : ""}
+    <div class="iv-xcs"><span class="iv-xc hi">${RES[r.type] || "✨"} ${esc(cap1(r.type || "other"))}</span>${r.creator && r.creator !== r.title ? `<span class="iv-xc">${esc(r.creator)}</span>` : ""}</div>
+    ${r.note ? `<p class="xn">${esc(r.note)}</p>` : ""}
+    ${finding ? `<p class="xn"><span class="spin"></span> Finding the link…</p>` : `<span class="iv-go">${ru ? esc(RES_LABEL[r.type] || "Open it") : "Search for it"} ↗</span>`}`;
+  return href ? `<a class="iv-x" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${inner}</a>` : `<div class="iv-x">${inner}</div>`;
+}
+function ivEntities(it) {
+  const e = it.entities || {}, u = safeUrl(it.url), out = [], card = (h, body) => `<div class="iv-x"><h4>${h}</h4>${body}</div>`;
+  if (e.place?.name) { const q = encodeURIComponent([e.place.name, e.place.address, e.place.city].filter(Boolean).join(" ")), site = safeUrl(e.place.website) || safeUrl((it.resources || []).find(r => r.type === "place" && r.url)?.url);
+    out.push(card(`📍 ${esc(e.place.name)}`, `<p>${esc([e.place.category, e.place.address, e.place.city].filter(Boolean).join(" · "))}</p>${e.place.known_for ? `<p style="color:inherit">${esc(e.place.known_for)}</p>` : ""}
+      <div class="row">${it.source === "maps" && u ? `<a class="btn sm" target="_blank" rel="noopener noreferrer" href="${esc(u)}">Open the map ↗</a>` : `<a class="btn sm" target="_blank" rel="noopener noreferrer" href="https://www.google.com/maps/search/?api=1&query=${q}">Google Maps ↗</a>`}
+      <a class="btn sm line" target="_blank" rel="noopener noreferrer" href="https://maps.apple.com/?q=${q}">Apple Maps ↗</a>${site ? `<a class="btn sm line" target="_blank" rel="noopener noreferrer" href="${esc(site)}">Website ↗</a>` : ""}</div>`)) }
+  if (e.product?.name) out.push(card(`🛍️ ${esc(e.product.name)}`, `<div class="iv-xcs">${[e.product.brand, e.product.price].filter(Boolean).map(x => `<span class="iv-xc">${esc(x)}</span>`).join("")}</div>`));
+  if (e.recipe?.ingredients?.length) out.push(card(`🍽️ Ingredients`, `<ul class="tk small">${e.recipe.ingredients.map(x => `<li>${esc(x)}</li>`).join("")}</ul>${e.recipe.steps?.length ? `<h4 style="margin-top:14px">Steps</h4><ol class="small" style="padding-left:20px;margin:6px 0 0">${e.recipe.steps.map(x => `<li style="margin:4px 0">${esc(x)}</li>`).join("")}</ol>` : ""}
+    <div class="row"><button class="btn sm ghost" data-act="copy" data-id="${esc(e.recipe.ingredients.join("\n"))}">Copy the list</button></div>`));
+  if (e.book?.title) out.push(card(`📖 ${esc(e.book.title)}`, e.book.author ? `<p>${esc(e.book.author)}</p>` : ""));
+  if (e.tool?.name) out.push(card(`🛠️ ${esc(e.tool.name)}`, `${e.tool.what_for ? `<p>${esc(e.tool.what_for)}</p>` : ""}${safeUrl(e.tool.url) ? `<a class="iv-go" target="_blank" rel="noopener noreferrer" href="${esc(safeUrl(e.tool.url))}">Open it ↗</a>` : ""}`));
+  if (e.workout?.exercises?.length) out.push(card(`🏃 Workout`, `<ul class="tk small">${e.workout.exercises.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`));
+  if (e.event?.name) out.push(card(`🎟️ ${esc(e.event.name)}`, `<p>${esc([e.event.date, e.event.place].filter(Boolean).join(" · "))}</p>`));
+  return out.length ? `<section class="iv-sec"><div class="iv-cols">${out.join("")}</div></section>` : "";
+}
+function ivBody(it) {
+  const u = safeUrl(it.url), [sname] = SRC[it.source] || SRC.web;
+  if (pending(it)) return `${ivHead(it)}<h2 class="iv-title"><span class="spin"></span> Reading it…</h2>
+    <p class="iv-sum">Usually under a minute. GSD listens to it, watches short clips and then looks up what was mentioned. You can close this.</p>`;
+  const acts = S.actions.filter(a => a.item_id === it.id && a.status !== "dismissed").sort((x, y) => (x.resource_idx ?? 99) - (y.resource_idx ?? 99)), rel = S.related[it.id];
+  const ts = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  const meta = [sname || hostOf(u), "saved " + ago(it.created_at), it.resaved_count ? `saved ${it.resaved_count + 1} times` : "", it.status === "kept" ? "💚 Kept" : it.status === "let_go" ? "🍃 Let go" : "Unsorted"].filter(Boolean).join(" · ");
+  const noteOpen = S.sheet.noteOpen || it.note;
+  return `${ivHead(it)}
+    ${(it.tags || []).length ? `<div class="iv-tags">${it.tags.map(x => `<button class="iv-tag lgb" data-act="ivtag" data-id="${esc(x)}">${esc(tagLabel(x))}</button>`).join("")}</div>` : ""}
+    <h2 class="iv-title">${esc(it.title || "Untitled")}</h2>
+    <p class="iv-meta">${esc(meta)}</p>
+    ${it.stage === "failed" ? `<div class="banner" style="background:var(--red-bg);color:var(--red)">${esc(ERR[it.error_code] || "Something went wrong reading this.")}${it.diag ? `<br><span class="tiny" style="color:inherit;opacity:.8">Details: ${esc(it.diag)}</span>` : ""}
+      <div class="row" style="margin-top:10px"><button class="btn sm" data-act="reprocess" data-id="${it.id}">Re-read</button></div></div>` : ""}
+    ${it.summary ? `<p class="iv-sum">${esc(it.summary)}</p>` : ""}
+    <hr class="iv-hr">
+    ${noteOpen ? `<div class="iv-note"><label class="iv-lbl" for="note">${IC.doc.replace("<svg", '<svg width="18" height="18"')} Your note</label><textarea class="field" id="note" data-note="${it.id}" placeholder="Why it matters to you" rows="3">${esc(it.note || "")}</textarea></div>`
+      : `<button class="iv-addnote lgb" data-act="ivnote">${IC.doc} Add a note</button>`}
+    ${it.takeaways?.length ? `<section class="iv-sec"><h3 class="iv-h">Key points</h3><ol class="iv-pts">${it.takeaways.map(k => `<li>${esc(k.text)}${k.t != null && it.source === "youtube" && u ? ` <a class="chip" style="padding:2px 8px" target="_blank" rel="noopener noreferrer" href="${esc(u + (u.includes("?") ? "&" : "?") + "t=" + k.t + "s")}">${ts(k.t)}</a>` : ""}</li>`).join("")}</ol></section>` : ""}
+    ${(it.quotes || []).length ? `<section class="iv-sec"><div class="iv-cols">${it.quotes.map(q => `<blockquote class="iv-quote">${esc(q)}</blockquote>`).join("")}</div></section>` : ""}
+    ${ivEntities(it)}
+    ${(it.resources || []).length ? `<section class="iv-sec"><h3 class="iv-h">Mentioned <small>${it.enrich_state === "pending" ? '<span class="spin"></span> Finding the links…' : it.resources.length}</small></h3>
+      <div class="iv-cols">${it.resources.map(r => resCard(r, it)).join("")}</div></section>` : ""}
+    <section class="iv-sec"><h3 class="iv-h">Do something with it <button data-act="ownact" data-id="${it.id}">+ Your own</button></h3>
+      ${acts.length ? `<div class="iv-cols">${acts.map(a => actRow(a, "", true)).join("")}</div>` : `<p class="small mute">No actions yet.</p>`}
+      ${it.stage === "ready" ? `<form data-form="steer" data-id="${it.id}" class="row" style="margin-top:4px"><input class="field" id="steer" style="flex:1;min-width:160px" placeholder="Different ideas… (optional: “outdoors”, “shorter”)" aria-label="Steer new ideas"><button class="btn sm ghost" ${S.busy ? "disabled" : ""}>${S.busy ? '<span class="spin"></span>' : "Different ideas"}</button></form>` : ""}</section>
+    ${rel?.length ? `<section class="iv-sec"><h3 class="iv-h">Related saves</h3><div class="iv-rel">${rel.map(tile).join("")}</div></section>` : ""}
+    <p class="iv-foot">${[it.opened_count ? `Opened ${it.opened_count} time${it.opened_count === 1 ? "" : "s"}` : "", it.quality === "caption_only" ? "Read from the caption only" : it.quality === "title_only" ? "Only the title was readable" : ""].filter(Boolean).join(" · ")}</p>`;
+}
+let ivStatic = false;
+function itemView(it) {
+  if (!it) return `<div class="overlay" data-act="backdrop"><div class="sheet" role="dialog" aria-modal="true"><button class="x" data-act="close" aria-label="Close">✕</button><p>This save is gone.</p></div></div>`;
+  const img = thumbUrl(it), h = Math.round(hash(it.id) * 360);
+  const amb = img ? `url('${img}')` : `radial-gradient(circle at 18% 12%,hsl(${h} 72% 64%),transparent 58%),radial-gradient(circle at 85% 82%,hsl(${(h + 40) % 360} 62% 56%),transparent 60%),hsl(${h} 42% 44%)`;
+  return `<div class="iv${ivStatic ? " static" : ""}" data-id="${it.id}" data-act="backdrop" style="--tint:${TINT.get(it.thumb_path) || fallbackTint(it)};--amb:${esc(amb)}" role="dialog" aria-modal="true" aria-label="${esc(it.title || "Save")}">
+    <div class="iv-win"><div class="iv-amb" aria-hidden="true"><i></i></div>
+      <button class="iv-back lg warp lgb" data-act="close" aria-label="Close">${IC.back}${IC.x}</button>
+      <div class="iv-scroll" id="ivs"><div class="iv-grid">
+        <section class="iv-media" aria-label="Original">${ivMedia(it)}</section>
+        <section class="iv-sheet lg">${ivBody(it)}</section>
+      </div></div></div></div>`;
+}
+function ivMount(same, top) {
+  const iv = $(".iv"), sc = $("#ivs"); if (!iv || !sc) return;
+  if (same) sc.scrollTop = top;
+  let raf = 0;
+  const upd = () => { raf = 0; const sh = $(".iv-sheet", iv); if (sh) iv.style.setProperty("--p", Math.min(1, Math.max(0, sc.scrollTop / Math.max(1, sh.offsetTop - 80))).toFixed(3)) };
+  sc.addEventListener("scroll", () => { if (!raf) raf = requestAnimationFrame(upd) }, { passive: true }); upd();
+  sc.addEventListener("touchend", () => { if (sc.scrollTop < -70) H.close() }, { passive: true }); // pull down past the top to close (iOS rubber band)
+  if (!same) $(".iv-back", iv).focus({ preventScroll: true });
+  const it = item(iv.dataset.id);
+  if (it?.thumb_path && !TINT.has(it.thumb_path)) tintFor(it).then(t => { if (t && iv.isConnected) { iv.style.setProperty("--tint", t); setThemeColor() } });
+}
+
+/* back button / back gesture closes whatever sheet is open */
+let histOn = false;
+function syncHistory() {
+  if (S.sheet && !histOn) { try { history.pushState({ gsdSheet: 1 }, ""); histOn = true } catch {} }
+  else if (!S.sheet && histOn) { histOn = false; if (history.state?.gsdSheet) history.back() }
+}
+addEventListener("popstate", () => { if (!histOn) return; histOn = false; if (S.sheet) H.close() });
+if (navigator.userAgentData && !matchMedia("(prefers-reduced-motion: reduce)").matches) document.documentElement.classList.add("lg-warp"); // the SVG warp only renders right in Chromium
 
 /* ---------- render ---------- */
 const TABS = [["home", "🏠", "Home"], ["library", "🗂️", "Library"], ["explore", "✨", "Explore"], ["actions", "⚡", "Actions"], ["profile", "🙂", "You"]];
@@ -433,7 +558,17 @@ function render() {
     <nav class="tabs" aria-label="Main">${TABS.slice(0, 2).map(tabBtn).join("")}<button class="plus" data-act="save" aria-label="Save something">+</button>${TABS.slice(2).map(tabBtn).join("")}</nav></div>`;
   if (S.tab === "explore") watchFeed();
 }
-function renderSheet() { $("#sheet").innerHTML = sheetHtml(); document.body.style.overflow = S.sheet ? "hidden" : "" }
+function renderSheet() {
+  const host = $("#sheet"), prev = host.firstElementChild;
+  // Re-rendering the same open save (polling, a toggle, related saves arriving) keeps its scroll, skips the entrance and keeps what you're typing.
+  const same = S.sheet?.type === "item" && prev?.classList.contains("iv") && prev.dataset.id === S.sheet.id, top = same ? $("#ivs")?.scrollTop || 0 : 0;
+  const ae = document.activeElement, keep = same && ae?.id && host.contains(ae) && /^(TEXTAREA|INPUT)$/.test(ae.tagName) ? { id: ae.id, v: ae.value, a: ae.selectionStart, b: ae.selectionEnd } : null;
+  ivStatic = same; host.innerHTML = sheetHtml(); ivStatic = false;
+  document.body.style.overflow = S.sheet ? "hidden" : "";
+  if (S.sheet?.type === "item") ivMount(same, top);
+  if (keep) { const el = document.getElementById(keep.id); if (el) { el.value = keep.v; el.focus({ preventScroll: true }); try { el.setSelectionRange(keep.a, keep.b) } catch {} } }
+  setThemeColor(); syncHistory();
+}
 function openSheet(s) { S.sheet = s; confirmDel = null; renderSheet() }
 function refresh() { render(); renderSheet() }
 function watchFeed() {
@@ -478,8 +613,17 @@ function fileToJpeg(file) {
 const H = {
   tab(id) { S.tab = id; S.sheet = null; refresh(); scrollTo(0, 0) },
   save() { openSheet({ type: "save" }); setTimeout(() => $("#sv")?.focus(), 50) },
-  close() { S.sheet = null; refresh() },
-  backdrop(id, e) { if (e.target.classList.contains("overlay")) H.close() },
+  close() {
+    const iv = $(".iv");
+    if (iv && !iv.classList.contains("out") && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const was = S.sheet; iv.classList.add("out"); setTimeout(() => { if (S.sheet === was) { S.sheet = null; refresh() } }, 190); return }
+    S.sheet = null; refresh() },
+  backdrop(id, e) { if (e.target.classList.contains("overlay") || e.target.classList.contains("iv")) H.close() },
+  ivmenu() { S.sheet.menu = !S.sheet.menu; renderSheet(); if (S.sheet.menu) $(".iv-menu [role=menuitem]")?.focus({ preventScroll: true }) },
+  menuclose() {},
+  ivnote() { S.sheet.noteOpen = true; renderSheet(); $("#note")?.focus() },
+  ivarea(id) { S.area = id; S.lib = "all"; S.q = ""; H.tab("library") },
+  ivtag(id) { S.q = id; S.area = ""; S.lib = "all"; H.tab("library") },
   reload() { location.reload() },
   undo() { const u = toast.undo; $("#toast").innerHTML = ""; toast.undo = null; if (u) u() },
   dosave() { const v = $("#sv").value.trim(); if (v) saveThing({ text: v, note: $("#sn").value.trim() }) },
@@ -585,6 +729,7 @@ async function doAsk() {
 }
 document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
+  if (S.sheet?.menu && el.dataset.act !== "ivmenu") { S.sheet.menu = false; setTimeout(() => { if (S.sheet?.type === "item") renderSheet() }) } // any tap closes the ⋯ menu
   const fn = H[el.dataset.act]; if (fn) Promise.resolve(fn(el.dataset.id, e)).catch(err => console.error(err));
 });
 document.addEventListener("submit", async e => {
@@ -608,13 +753,13 @@ document.addEventListener("change", async e => {
   if (t.dataset.save) api.profile({ [t.dataset.save]: t.dataset.save === "daily_minutes" ? Number(t.value) : t.value.trim(), onboarded_at: S.profile.onboarded_at || now() }).then(() => toast("Saved"));
   if (t.dataset.note) api.upd("items", t.dataset.note, { note: t.value.trim() }).then(() => toast("Note saved")).catch(() => {});
 });
-document.addEventListener("keydown", e => { if (e.key === "Escape" && S.sheet) H.close() });
+document.addEventListener("keydown", e => { if (e.key !== "Escape" || !S.sheet) return; if (S.sheet.menu) { S.sheet.menu = false; renderSheet(); $(".iv-tools .iv-ic")?.focus() } else H.close() });
 document.addEventListener("visibilitychange", () => { if (!document.hidden && S.screen === "app") poll() });
 
 /* ---------- boot ---------- */
 const params = new URLSearchParams(location.search);
 const incoming = { save: [params.get("url"), params.get("text"), params.get("save")].filter(Boolean).join(" ") || (params.get("title") && !params.get("url") ? params.get("title") : ""), gate: params.get("gate") };
-try { if (location.search) history.replaceState(null, "", location.pathname) } catch {}
+try { if (location.search || history.state?.gsdSheet) history.replaceState(null, "", location.pathname) } catch {} // a reload with a sheet open leaves its history entry behind
 async function start() {
   try { await api.load() } catch (e) { S.screen = "error"; S.error = e.message || String(e); return render() }
   if (!S.profile) { S.screen = "error"; S.error = "Your profile wasn't created. Sign out and try again."; return render() }
