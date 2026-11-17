@@ -1,10 +1,12 @@
 // GSD backend: one Edge Function with routes.
-//   POST /gsd/capture      user token or capture token   save a link, note or image
+//   POST /gsd/capture      user token or capture token   save a link, note or image (lane: now | next | library)
 //   POST /gsd/worker       internal secret               run the pipeline (read -> understand -> find links)
 //   POST /gsd/reprocess    user token                    re-read one item
 //   POST /gsd/ask          user token                    answer from the library with sources
 //   POST /gsd/suggest      user token                    two new actions for an item (optional steer)
-//   GET  /gsd/gate-check   capture token                 should the gate page open?
+//   GET  /gsd/gate-check   capture token                 should the gate page open? (?app=instagram)
+// Now: three slots (items.lane = 'now'), Up next (lane = 'next', max 5). The database enforces the caps,
+// logs every stay in Now (focus_log) and banks a scroll pass when a Now item is finished (scroll_passes).
 // Secrets: OPENAI_API_KEY (required), SUPADATA_API_KEY (needed for video transcripts and watching).
 // Optional: MODEL_UNDERSTAND, MODEL_VISION, MODEL_ASK, MODEL_ENRICH, MODEL_EMBED, APP_ORIGINS.
 // Auth is done in code (verify_jwt is off) because capture tokens and the internal secret are not JWTs.
@@ -210,12 +212,13 @@ const arr = (items: unknown) => ({ type: "array", items });
 const obj = (p: Record<string, unknown>) => ({ type: "object", additionalProperties: false, required: Object.keys(p), properties: p });
 const opt = (p: Record<string, unknown>) => ({ anyOf: [obj(p), { type: "null" }] });
 const MODES = ["learn", "create", "build", "grow", "experience"];
+const KINDS = ["video", "film", "show", "article", "place", "recipe", "book", "quote", "idea", "tool", "workout", "product", "event", "music", "note", "other"];
 const RTYPES = ["article", "book", "paper", "film", "show", "podcast", "video", "tool", "repo", "course", "product", "place", "person", "music", "other"];
 const ACTION = obj({ title: S, why: S, minutes: I, first_step: S, steps: arr(S),
   mode: { type: "string", enum: MODES }, effort: { type: "string", enum: ["tiny", "real"] }, context: { type: "string", enum: ["anywhere", "home", "computer", "out"] } });
 const understandSchema = (areas: string[]) => obj({
   title: S,
-  kind: { type: "string", enum: ["video", "article", "place", "recipe", "book", "quote", "idea", "tool", "workout", "product", "event", "music", "note", "other"] },
+  kind: { type: "string", enum: KINDS },
   language: S, summary: S, insight: S,
   takeaways: arr(obj({ text: S, t: NI })), quotes: arr(S),
   area: { type: "string", enum: [...new Set([...areas, "Other"])] }, tags: arr(S),
@@ -223,10 +226,12 @@ const understandSchema = (areas: string[]) => obj({
     place: opt({ name: S, category: S, address: S, city: S, country: S, known_for: S, website: S }),
     recipe: opt({ servings: NI, time_minutes: NI, ingredients: arr(S), steps: arr(S) }),
     book: opt({ title: S, author: S }), tool: opt({ name: S, url: S, what_for: S }),
+    film: opt({ title: S, year: NI, type: { type: "string", enum: ["film", "show"] }, creator: S, genre: S, runtime_minutes: NI, where_to_watch: S }),
     workout: opt({ duration_minutes: NI, exercises: arr(S) }), product: opt({ name: S, brand: S, price: S }),
     event: opt({ name: S, date: S, place: S }),
   }),
   resources: arr(obj({ type: { type: "string", enum: RTYPES }, title: S, creator: S, about: S, search_hint: S, action_title: S, why: S, first_step: S, minutes: I })),
+  do_it: obj({ ...ACTION.properties, resource_index: NI }),
   actions: arr(ACTION), recall: arr(obj({ q: S, a: S })),
   confidence: { type: "string", enum: ["full", "partial", "thin"] },
 });
@@ -244,14 +249,14 @@ Write for one specific person, described under PERSON. Use plain, concrete langu
 
 Fields:
 - title: clear and specific, at most 80 characters. Keep a good original title; fix clickbait. For a map link, the title is the place's name.
-- kind: what this save is for the person, not its format. A reel recommending a restaurant is "place". A video walking through a dish is "recipe". A map link is "place".
+- kind: what this save is for the person, not its format. A reel recommending a restaurant is "place". A video walking through a dish is "recipe". A reel or post recommending one film is "film", one series is "show". A map link is "place". Use "video" only when the video itself is the thing worth watching (a talk, a lesson).
 - summary: 2-3 sentences with the substance: the actual claims, names and numbers.
 - insight: the single most interesting or useful idea, one sentence, at most 160 characters. It must make sense on its own.
 - takeaways: 3-6 concrete points, each useful on its own: the specific advice, step, number or name. Do not use takeaways to list the resources; those go in resources. When the content has [mm:ss] markers, set t to the second where the point is made; otherwise null.
 - quotes: 0-2 short memorable lines taken word for word from the content, each under 15 words. Empty if none stand out.
 - area: choose the best fit from the allowed list.
 - tags: 1-3 short lowercase tags. Reuse a tag from EXISTING TAGS whenever one fits.
-- entities: fill only the object that matches kind; all others null. Use only facts present in the content. Unknown sub-fields are empty strings or empty arrays. For a place, known_for is one line on what to go there for, and website is its own site if the content gives one.
+- entities: fill only the object that matches kind (film and show both use film); all others null. Use only facts present in the content. Unknown sub-fields are empty strings, empty arrays or null. For a place, known_for is one line on what to go there for, and website is its own site if the content gives one. For a film or show, where_to_watch is the streaming service only if the content names it.
 - resources: every specific thing the content recommends or tells people to get, read, watch, use or visit: articles, essays, books, papers, films, shows, podcasts, videos, tools, apps, GitHub repositories, courses, products, places, people to follow. One entry each, up to 8, in the order mentioned.
   - Spoken content often gives a title without announcing it. A sentence that reads like a headline next to an author's name is the title: "I'm 38, if you're in your 20s or 30s, read this. Tim Denning is so blunt" means title "I'm 38, If You're in Your 20s or 30s, Read This", creator "Tim Denning". Fix obvious speech-to-text errors in names ("CloudCode" is "Claude Code"). Prefer the spelling shown on screen or in the caption.
   - type; title: its exact name; creator: author or maker, or empty; about: one sentence on what it is and what the person gets from it.
@@ -260,7 +265,8 @@ Fields:
   - why: one sentence on why this one fits the person. minutes: honest time to read, watch or try it (for a book or course: the first sitting, 20-30).
   - first_step: what to do with it in the next two minutes. A direct link to the resource will be attached to the action, so never tell them to search for it: start from opening it ("Open it and read the first two paragraphs", "Open the repository and run the install command shown", "Comment ‘Human’ on the reel to get the link").
   - Empty when nothing specific is recommended. When the save itself is one article, tool, book or place, that thing is the one resource.
-- actions: 1 or 2 experiments that APPLY an idea from the content in the person's own life or work. Not reading or watching a resource; those are already covered by resources. If two, make one tiny and one real. For a place: a concrete plan to go (when, with whom, what to order or see).
+- do_it: the one action that counts as having DONE this save. The person keeps three saves in a "Now" list and ticks them off, so this is what ticking it off means. A recipe: cook it ("Cook the crispy gochujang chicken"). A film or show: watch it ("Watch Past Lives", and the service in first_step if known). A place: go there (when, with whom, what to order). A book: read the first chapter. An article: read it. A tool: set it up and use it once for something real. A workout: do it once. An idea or quote: the smallest real experiment. Title verb first, at most 70 characters, naming the thing. If it is about one of the resources, set resource_index to that resource's position (0-based), otherwise null.
+- actions: 1 or 2 experiments that APPLY an idea from the content in the person's own life or work. Not reading or watching a resource; those are already covered by resources, and not the same as do_it. If two, make one tiny and one real. For a place: a concrete plan to go (when, with whom, what to order or see).
 ${ACTION_RULES}
 - recall: 2-4 question and answer pairs that test understanding of ideas worth remembering. Empty for places, products, recipes, events and music.
 - confidence: "full" if you had the real content, "partial" if only a caption or excerpt, "thin" if only a title or URL. When thin, keep the summary to what is known and keep actions modest.
@@ -313,10 +319,40 @@ const R_MODE: Record<string, string> = { article: "learn", book: "learn", paper:
 const R_LABEL: Record<string, string> = { article: "Read it", paper: "Read the paper", book: "See the book", film: "Where to watch", show: "Where to watch", podcast: "Play it", video: "Watch it", tool: "Open it", repo: "Open the repo", course: "Open the course", place: "Website", product: "See it", person: "Their page", music: "Play it", other: "Open it" };
 
 // ---------- capture ----------
+// Where a save goes: "now", "next" or the library. Taken from the body (lane: "Now" | "Up next" | "Library",
+// as an iPhone Shortcut menu sends it) or from a #now / #next tag in the text or note.
+function laneOf(b: any): "now" | "next" | "" {
+  const v = String(b.lane ?? b.to ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  if (v === "now" || v === "donow") return "now";
+  if (v === "next" || v === "upnext") return "next";
+  if (v) return "";
+  const t = `${b.text ?? ""} ${b.note ?? ""}`;
+  return /(^|\s)#now\b/i.test(t) ? "now" : /(^|\s)#(up)?next\b/i.test(t) ? "next" : "";
+}
+const stripLaneTag = (t: string) => t.replace(/(^|\s)#(now|next|upnext)\b/gi, " ").replace(/\s+/g, " ").trim();
+// Put the save in its lane. The database enforces the caps (3 in Now, 5 in Up next) and picks the slot.
+// When Now is full it goes to the front of Up next; when that is full too, it stays in the library.
+async function placeLane(userId: string, id: string, want: "now" | "next" | "") {
+  if (!want) return { lane: "library", message: "Saved to your Library." };
+  if (want === "now") {
+    const { data, error } = await admin.from("items").update({ lane: "now" }).eq("id", id).select("slot").single();
+    if (!error) return { lane: "now", slot: data.slot, message: `Saved to Now (slot ${data.slot} of 3).` };
+  }
+  const { data: first } = await admin.from("items").select("next_pos").eq("user_id", userId).eq("lane", "next").order("next_pos").limit(1).maybeSingle();
+  const { error } = await admin.from("items").update({ lane: "next", ...(want === "now" ? { next_pos: (first?.next_pos ?? 1) - 1 } : {}) }).eq("id", id);
+  if (!error) return { lane: "next", message: want === "now" ? "Now is full, so it's first in Up next." : "Saved to Up next." };
+  return { lane: "library", message: "Now and Up next are full, so it's in your Library." };
+}
 async function capture(req: Request, user: { id: string }) {
   const b = await req.json().catch(() => ({}));
   const via = ["app", "shortcut", "share_target", "bookmarklet", "api"].includes(b.via) ? b.via : "api";
-  const note = String(b.note ?? "").slice(0, 500);
+  const want = laneOf(b);
+  if (typeof b.text === "string") b.text = stripLaneTag(b.text);
+  const note = stripLaneTag(String(b.note ?? "")).slice(0, 500);
+  const done = async (id: string, duplicate: boolean, title?: string, inLane?: string | null) => {
+    const placed = inLane ? { lane: inLane, message: `Already in ${inLane === "now" ? "Now" : "Up next"}.` } : await placeLane(user.id, id, want);
+    return json(req, { item_id: id, duplicate, ...(title ? { title } : {}), ...placed, message: duplicate && !want ? "You saved this before. Moved it to the top." : placed.message });
+  };
   const { data: used } = await admin.rpc("bump_usage", { p_user: user.id, p_day: today(), p_field: "captures", p_amount: 1 });
   if ((used ?? 0) > 100) return json(req, { error: "daily_limit", limit: 100 }, 429);
 
@@ -331,7 +367,7 @@ async function capture(req: Request, user: { id: string }) {
     } else if (!path.startsWith(user.id + "/")) return json(req, { error: "invalid_image" }, 400);
     const { data, error } = await admin.from("items").insert({ user_id: user.id, source: "image", kind: "other", via, note, image_path: path, title: "Image" }).select("id").single();
     if (error) return json(req, { error: "db", message: error.message }, 500);
-    return json(req, { item_id: data.id, duplicate: false });
+    return done(data.id, false);
   }
 
   const text = [b.url, b.text].filter(Boolean).join(" ").trim();
@@ -340,22 +376,22 @@ async function capture(req: Request, user: { id: string }) {
   if (!link) {
     const { data, error } = await admin.from("items").insert({ user_id: user.id, source: "note", kind: "note", via, note, content_text: text.slice(0, 20000), title: text.slice(0, 80) }).select("id").single();
     if (error) return json(req, { error: "db", message: error.message }, 500);
-    return json(req, { item_id: data.id, duplicate: false });
+    return done(data.id, false);
   }
   const c = canonical(link);
   if (!c) return json(req, { error: "invalid_url" }, 400);
-  const { data: ex } = await admin.from("items").select("id,title,note,status,resaved_count").eq("user_id", user.id).eq("canonical_url", c.url).maybeSingle();
+  const { data: ex } = await admin.from("items").select("id,title,note,status,resaved_count,lane").eq("user_id", user.id).eq("canonical_url", c.url).maybeSingle();
   if (ex) {
     await admin.from("items").update({
       resaved_count: ex.resaved_count + 1, last_saved_at: new Date().toISOString(),
       note: note && !ex.note.includes(note) ? [ex.note, note].filter(Boolean).join("\n") : ex.note,
       ...(ex.status === "let_go" ? { status: "inbox", let_go_at: null } : {}),
     }).eq("id", ex.id);
-    return json(req, { item_id: ex.id, duplicate: true, title: ex.title });
+    return done(ex.id, true, ex.title, ex.lane);
   }
   const { data, error } = await admin.from("items").insert({ user_id: user.id, url: link, canonical_url: c.url, source: c.source, start_seconds: c.start, via, note, title: String(b.title ?? "").slice(0, 200) || (c.source === "maps" ? "Place" : c.url) }).select("id").single();
   if (error) return json(req, { error: "db", message: error.message }, 500);
-  return json(req, { item_id: data.id, duplicate: false });
+  return done(data.id, false);
 }
 
 // ---------- reading ----------
@@ -659,9 +695,22 @@ async function processItem(item: any, diag: string[]): Promise<void> {
     return { user_id: item.user_id, item_id: item.id, origin: "ai", resource_idx: idx, title: String(r.action_title || `Open ${r.title}`).slice(0, 160), why: String(r.why || r.about || "").slice(0, 300),
       minutes, first_step: String(r.first_step || "Open the link.").slice(0, 300), steps: [], mode: R_MODE[type], effort: minutes <= 10 ? "tiny" : "real", context: type === "place" ? "out" : "anywhere" };
   });
-  const acts = [...resActs, ...list(out.actions).filter((a: any) => a?.title).slice(0, 2).map((a) => ({ ...cleanAction(a), user_id: item.user_id, item_id: item.id, origin: "ai" }))]
-    .filter((a) => !have.has(a.title.toLowerCase()));
-  if (acts.length) await admin.from("actions").insert(acts);
+  // do_it: the action that counts as having done the save. When it is about a resource, that resource's
+  // action becomes it (so the link found later lands on it); otherwise it is its own action.
+  const d = out.do_it?.title ? out.do_it : null;
+  const ri = d && Number.isInteger(d.resource_index) && resActs[d.resource_index] ? d.resource_index : null;
+  if (d && ri !== null) Object.assign(resActs[ri], { is_primary: true, title: String(d.title).slice(0, 160), why: String(d.why || resActs[ri].why).slice(0, 300), first_step: String(d.first_step || resActs[ri].first_step).slice(0, 300) });
+  const primary = d && ri === null ? [{ ...cleanAction(d), user_id: item.user_id, item_id: item.id, origin: "ai", is_primary: true }] : [];
+  const acts = [...primary, ...resActs, ...list(out.actions).filter((a: any) => a?.title).slice(0, 2).map((a) => ({ ...cleanAction(a), user_id: item.user_id, item_id: item.id, origin: "ai" }))]
+    .filter((a, k, all) => !have.has(a.title.toLowerCase()) && all.findIndex((x) => x.title.toLowerCase() === a.title.toLowerCase()) === k)
+    .map((a: any) => ({ is_primary: false, resource_idx: null, ...a })); // every row has every column, so a bulk insert never sends null for a not-null one
+  if (acts.length) {
+    const { data: made } = await admin.from("actions").insert(acts).select("id,is_primary");
+    // Saved straight into Now (or Up next) before it was read: the do_it action becomes its plan.
+    const { data: cur } = await admin.from("items").select("lane,plan_action_id").eq("id", item.id).maybeSingle();
+    const pick = (made ?? []).find((a: any) => a.is_primary) ?? (made ?? [])[0];
+    if (cur?.lane && !cur.plan_action_id && pick) await stage(item.id, { plan_action_id: pick.id });
+  }
 
   const auto = !!profile?.auto_remember && quality === "full" && ["video", "article", "book", "idea"].includes(upd.kind as string);
   const active = item.remember || auto;
@@ -790,6 +839,27 @@ async function suggest(req: Request, user: { id: string }) {
   return json(req, { actions: data });
 }
 
+// ---------- gate ----------
+// Called by an iPhone automation each time a social app opens. The page only opens when there is
+// no scroll pass running. `open` is "yes" or "no" because Shortcuts compares text more reliably than booleans.
+async function gateCheck(req: Request, user: { id: string }) {
+  const app = (new URL(req.url).searchParams.get("app") ?? "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 40);
+  const { data: p } = await admin.from("profiles").select("commitment").eq("user_id", user.id).maybeSingle();
+  const out = (gate: boolean, extra: Record<string, unknown> = {}) => json(req, { gate, open: gate ? "yes" : "no", ...extra });
+  if (!p || p.commitment === "none") return out(false, { reason: "gate_off" });
+  const nowIso = new Date().toISOString();
+  const [{ data: run }, { count: inNow }, { count: banked }] = await Promise.all([
+    admin.from("scroll_passes").select("ends_at,source").eq("user_id", user.id).gt("ends_at", nowIso).order("ends_at", { ascending: false }).limit(1).maybeSingle(),
+    admin.from("items").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("lane", "now"),
+    admin.from("scroll_passes").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("source", "earned").is("started_at", null),
+  ]);
+  if (run) return out(false, { reason: run.source, minutes_left: Math.max(1, Math.ceil((new Date(run.ends_at).getTime() - Date.now()) / 60000)) });
+  // Count the pause (once per two minutes, so a double open is not two).
+  const { count: recent } = await admin.from("gate_events").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("choice", "shown").gte("created_at", new Date(Date.now() - 120000).toISOString());
+  if (!recent) await admin.from("gate_events").insert({ user_id: user.id, app, choice: "shown" });
+  return out(true, { reason: inNow ? (banked ? "pass_available" : "earn_first") : "now_empty", now: inNow ?? 0, passes: banked ?? 0 });
+}
+
 // ---------- router ----------
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors(req) });
@@ -803,16 +873,7 @@ Deno.serve(async (req) => {
     const user = await whoIs(req);
     if (!user) return json(req, { error: "unauthorized" }, 401);
     if (route === "capture" && req.method === "POST") return await capture(req, user);
-    if (route === "gate-check") {
-      const { data: p } = await admin.from("profiles").select("commitment").eq("user_id", user.id).maybeSingle();
-      if (!p || p.commitment === "none") return json(req, { gate: false });
-      const since = new Date(Date.now() - 20 * 60000).toISOString(), dayStart = new Date(Date.now() - 18 * 3600000).toISOString();
-      const [{ count: recent }, { count: doneToday }] = await Promise.all([
-        admin.from("gate_events").select("id", { count: "exact", head: true }).eq("user_id", user.id).gte("created_at", since),
-        admin.from("actions").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("status", "done").gte("done_at", dayStart),
-      ]);
-      return json(req, { gate: !recent && !doneToday });
-    }
+    if (route === "gate-check") return await gateCheck(req, user);
     if (user.via !== "jwt") return json(req, { error: "forbidden" }, 403);
     if (route === "ask" && req.method === "POST") return await ask(req, user);
     if (route === "suggest" && req.method === "POST") return await suggest(req, user);

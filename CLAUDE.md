@@ -7,6 +7,8 @@ Personal inspiration-to-action web app. Vanilla JS frontend (no build step) on V
   Deploy: `supabase functions deploy gsd --project-ref dzyvmropxtvkdajzzkdw --no-verify-jwt`
 - Database: schema was applied as migrations in the Supabase project (gsd_init ... gsd_country_and_preferences). Run `supabase db pull` once to bring them into `supabase/migrations/`.
 - Secrets (set in Supabase, never in the repo): OPENAI_API_KEY, SUPADATA_API_KEY. Optional model overrides: MODEL_UNDERSTAND, MODEL_VISION, MODEL_ASK, MODEL_ENRICH, MODEL_EMBED.
+- Core model, "Now": at most 3 saves are active (items.lane = 'now', slot 1-3), up to 5 wait in Up next (lane = 'next', ordered by next_pos), everything else sits on Library shelves (derived from kind: Watch, Cook, Go, Read, Try, Move, Listen, Ideas, Wisdom). The caps, slot numbers, the focus_log history, plan-action status and earned scroll_passes are all enforced by triggers on items (migration gsd_now_slots); the app just sets lane. Finishing = clearing lane with done_at, done_count, rating (loved/good/meh), done_note. Every metric (weekly gauge, streak, passes, slips, turned back) is about Now.
+- Scroll gate: an iPhone automation calls gate-check?app=instagram on app open; it returns open "yes" unless a pass is running. Passes are spent via the use_pass RPC (pass | hunt when Now is empty | slip).
 - Pipeline: items table is a work queue; worker handles one item per run (read, understand, then find real links). Map links are resolved inside Postgres via pg_net.
 - Design: black/white, system font, pill buttons, emoji icons, `data-theme` light/dark.
 - Rules: output is always English; links prefer the person's country version (profiles.country); budget guide about $5/month of OpenAI.

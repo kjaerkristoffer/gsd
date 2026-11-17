@@ -10,7 +10,28 @@ const iso = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 6
 const addDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return iso(d) };
 const now = () => new Date().toISOString();
 const ago = t => { const d = Math.floor((Date.now() - new Date(t)) / 864e5); return d < 1 ? "today" : d === 1 ? "yesterday" : d < 30 ? d + " days ago" : d < 365 ? Math.floor(d / 30) + " mo ago" : Math.floor(d / 365) + " y ago" };
-const KIND = { video: "🎬", article: "📚", place: "📍", recipe: "🍽️", book: "📖", quote: "💬", idea: "💡", tool: "🛠️", workout: "🏃", product: "🛍️", event: "🎟️", music: "🎵", note: "📝", other: "✨" };
+const KIND = { video: "▶️", film: "🎬", show: "📺", article: "📚", place: "📍", recipe: "🍽️", book: "📖", quote: "💬", idea: "💡", tool: "🛠️", workout: "🏃", product: "🛍️", event: "🎟️", music: "🎵", note: "📝", other: "✨" };
+// Library shelves: what you would do with a save. Its kind puts it on one shelf.
+const SHELF = Object.fromEntries([
+  ["watch", "🎬", "Watch", ["film", "show", "video"], "To watch", "Watched"],
+  ["cook", "🍳", "Cook", ["recipe"], "To cook", "Tried & tested"],
+  ["go", "📍", "Go", ["place", "event"], "To go", "Been there"],
+  ["read", "📖", "Read", ["book", "article"], "To read", "Read"],
+  ["try", "🛠️", "Try", ["tool", "product"], "To try", "Tried"],
+  ["move", "🏃", "Move", ["workout"], "To do", "Done"],
+  ["listen", "🎵", "Listen", ["music"], "To play", "Played"],
+  ["ideas", "💡", "Ideas", ["idea", "quote", "note", "other"], "Open", "Done"],
+  ["wisdom", "💎", "Wisdom", [], "", ""],
+].map(([key, em, name, kinds, todo, done], order) => [key, { key, em, name, kinds, todo, done, order }]));
+const shelfOf = it => it.area === "Wisdom" && it.source === "note" ? SHELF.wisdom : Object.values(SHELF).find(s => s.kinds.includes(it.kind)) || SHELF.ideas;
+const VERB = { recipe: "Cooked", film: "Watched", show: "Watched", video: "Watched", place: "Been there", event: "Went", book: "Read", article: "Read", workout: "Done", tool: "Tried", product: "Tried", music: "Played" };
+const MARK = { recipe: "I cooked it", film: "I watched it", show: "I watched it", video: "I watched it", place: "I went", event: "I went", book: "I read it", article: "I read it", music: "I played it", tool: "I tried it", product: "I tried it" };
+const doneVerb = it => VERB[it.kind] || "Done";
+const markOf = it => MARK[it.kind] || "I did it";
+const RATE = { loved: ["😍", "Loved it"], good: ["👍", "Good"], meh: ["😐", "Meh"] };
+const tested = it => !!it.done_at && it.rating !== "meh"; // tried, and worth doing again
+const APPS = { instagram: "Instagram", youtube: "YouTube", tiktok: "TikTok", x: "X", twitter: "X", facebook: "Facebook", reddit: "Reddit" };
+const JW = { denmark: "dk", sweden: "se", norway: "no", finland: "fi", germany: "de", netherlands: "nl", france: "fr", spain: "es", italy: "it", "united kingdom": "uk", uk: "uk", england: "uk", "united states": "us", usa: "us", us: "us", canada: "ca", australia: "au" };
 const MODE = { learn: ["📚", "Learn"], create: ["🎨", "Create"], build: ["🛠️", "Build"], grow: ["🌱", "Grow"], experience: ["📍", "Experience"] };
 const RES = { article: "📰", book: "📖", paper: "📄", film: "🎬", show: "📺", podcast: "🎧", video: "▶️", tool: "🛠️", repo: "💻", course: "🎓", product: "🛍️", place: "📍", person: "👤", music: "🎵", other: "✨" };
 const RES_LABEL = { article: "Read it", paper: "Read the paper", book: "See the book", film: "Where to watch", show: "Where to watch", podcast: "Play it", video: "Watch it", tool: "Open it", repo: "Open the repo", course: "Open the course", place: "Website", product: "See it", person: "Their page", music: "Play it", other: "Open it" };
@@ -18,7 +39,7 @@ const RES_LABEL = { article: "Read it", paper: "Read the paper", book: "See the 
 const PRICE = { "gpt-6-luna": [.1, .5], "gpt-6.1-terra": [1, 5], "gpt-6.1-sol": [2, 10], "gpt-6-astra": [10, 50], "text-embedding-3-small": [.02, 0] };
 const BUDGET = 5;
 const LADDER = [1, 3, 7, 14, 30, 60, 120];
-const ITEM_COLS = "id,url,canonical_url,source,kind,title,author,thumb_path,start_seconds,summary,insight,takeaways,quotes,entities,area,tags,note,status,stage,error_code,quality,resaved_count,remember,last_surfaced_at,opened_count,created_at,diag,resources,enrich_state";
+const ITEM_COLS = "id,url,canonical_url,source,kind,title,author,thumb_path,start_seconds,summary,insight,takeaways,quotes,entities,area,tags,note,status,stage,error_code,quality,resaved_count,remember,last_surfaced_at,opened_count,created_at,diag,resources,enrich_state,lane,slot,lane_at,next_pos,plan_action_id,done_at,done_count,rating,done_note";
 const ERR = {
   private_or_missing: "This post is private or was removed. GSD can only read public links.",
   unreadable: "GSD couldn't read this page. You can still add your own note.",
@@ -49,8 +70,8 @@ function applyTheme() {
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { applyTheme(); if (S.screen === "app") render() });
 
 /* ---------- state ---------- */
-const S = { screen: "boot", user: null, profile: null, items: [], actions: [], cards: [], challenges: [], focus: null, tokens: [],
-  tab: "home", sheet: null, q: "", area: "", lib: "folders", folder: "", actTab: "doing", mode: "inspire", seen: new Set(), swapped: [], ask: null,
+const S = { screen: "boot", user: null, profile: null, items: [], actions: [], cards: [], log: [], passes: [], gates: [], tokens: [],
+  tab: "now", sheet: null, q: "", area: "", shelf: "", shelfTab: "todo", lib: "shelves", folder: "", mode: "inspire", seen: new Set(), ask: null,
   authMode: "in", authMsg: "", busy: false, related: {}, more: false, newToken: "" };
 let sb = null, confirmDel = null;
 
@@ -59,16 +80,25 @@ const must = r => { if (r.error) throw r.error; return r.data };
 const api = {
   async load() {
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
-    const [p, i, a, c, ch, f, u] = await Promise.all([
+    const [p, i, a, c, u] = await Promise.all([
       sb.from("profiles").select("*").eq("user_id", S.user.id).maybeSingle(),
       sb.from("items").select(ITEM_COLS).order("created_at", { ascending: false }).limit(1000),
       sb.from("actions").select("*").order("created_at", { ascending: false }).limit(3000),
       sb.from("recall_cards").select("id,item_id,q,a,active,step,due").limit(5000),
-      sb.from("challenges").select("*").eq("active", true).order("created_at", { ascending: false }),
-      sb.from("daily_focus").select("*").eq("day", iso()).maybeSingle(),
       sb.from("ai_calls").select("job,model,in_tokens,out_tokens,searches").gte("created_at", monthStart).limit(5000),
+      api.loadFocus(),
     ]);
-    S.profile = must(p); S.items = must(i); S.actions = must(a); S.cards = must(c); S.challenges = must(ch); S.focus = must(f); S.usage = u.data || [];
+    S.profile = must(p); S.items = must(i); S.actions = must(a); S.cards = must(c); S.usage = u.data || [];
+  },
+  // Now's history, the scroll passes and the gate's pauses: what the gauge and the stats are made of.
+  async loadFocus() {
+    const since = new Date(Date.now() - 140 * 864e5).toISOString();
+    const [l, ps, g] = await Promise.all([
+      sb.from("focus_log").select("*").or(`ended_at.is.null,started_at.gte."${since}"`).order("started_at", { ascending: false }).limit(2000),
+      sb.from("scroll_passes").select("*").or(`started_at.is.null,earned_at.gte."${since}"`).order("earned_at", { ascending: false }).limit(2000),
+      sb.from("gate_events").select("choice,app,created_at").gte("created_at", since).order("created_at", { ascending: false }).limit(5000),
+    ]);
+    S.log = must(l); S.passes = must(ps); S.gates = must(g);
   },
   async upd(table, id, patch) {
     const key = table === "recall_cards" ? "cards" : table;
@@ -83,11 +113,6 @@ const api = {
     Object.assign(S.profile, patch);
     const { error } = await sb.from("profiles").update(patch).eq("user_id", S.user.id);
     if (error) toast("Couldn't save settings");
-  },
-  async setFocus(patch) {
-    S.focus = { user_id: S.user.id, day: iso(), action_id: null, state: "offered", swaps: 0, ...(S.focus || {}), ...patch };
-    const { error } = await sb.from("daily_focus").upsert(S.focus, { onConflict: "user_id,day" });
-    if (error) console.error(error);
   },
   async fn(route, body) {
     const { data, error } = await sb.functions.invoke("gsd/" + route, { body });
@@ -107,6 +132,15 @@ const api = {
     if (c.data) S.cards = [...c.data, ...S.cards.filter(x => x.item_id !== id)];
     return i.data;
   },
+  async refreshActs(id) { const { data } = await sb.from("actions").select("*").eq("item_id", id); if (data) S.actions = [...data, ...S.actions.filter(x => x.item_id !== id)] },
+  // Move a save between Now, Up next and the library. The database checks the caps, picks the slot and keeps the history.
+  async lane(id, lane, extra = {}) {
+    const { data, error } = await sb.from("items").update({ lane, ...extra }).eq("id", id).select(ITEM_COLS).single();
+    if (error) { const m = error.message || ""; if (/now_full/.test(m)) return "now_full"; if (/next_full/.test(m)) return "next_full"; console.error(error); toast("Couldn't move it"); return "error" }
+    const cur = item(id); if (cur) Object.assign(cur, data); else S.items.unshift(data);
+    await api.refreshActs(id);
+    return "ok";
+  },
 };
 
 /* ---------- derived ---------- */
@@ -119,86 +153,129 @@ function spend() {
   return { total, saves };
 }
 const live = () => S.items.filter(i => i.status !== "let_go");
-const inbox = () => S.items.filter(i => i.status === "inbox" && !pending(i));
-const doneActs = () => S.actions.filter(a => a.status === "done");
-const openActs = () => S.actions.filter(a => (a.status === "suggested" || a.status === "doing") && (!a.item_id || (item(a.item_id) && item(a.item_id).status !== "let_go")));
+const inbox = () => S.items.filter(i => i.status === "inbox" && !i.lane && !pending(i));
 const dueCards = () => S.cards.filter(c => c.active && c.due && c.due <= iso() && item(c.item_id) && item(c.item_id).status !== "let_go").sort((a, b) => a.due < b.due ? -1 : 1).slice(0, 5);
 const thumbUrl = it => it.thumb_path ? `${CFG.url}/storage/v1/object/public/thumbs/${it.thumb_path}` : "";
-function ratio() { const kept = S.items.filter(i => i.status === "kept"); if (!kept.length) return 0; const used = new Set(doneActs().map(a => a.item_id)); return Math.round(100 * kept.filter(i => used.has(i.id)).length / kept.length) }
-function periodStart(p) { const d = new Date(); d.setHours(0, 0, 0, 0); if (p === "month") d.setDate(1); else d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d }
-const chProgress = c => doneActs().filter(a => new Date(a.done_at) >= periodStart(c.period) && (!c.mode || a.mode === c.mode)).length;
-
-function score(a) {
-  const it = item(a.item_id), p = S.profile, mins = p.daily_minutes || 15, dow = new Date().getDay(), weekend = dow === 0 || dow === 6;
+// Now (three slots) and Up next (five, in order)
+const nowItems = () => S.items.filter(i => i.lane === "now").sort((a, b) => a.slot - b.slot);
+const nextItems = () => S.items.filter(i => i.lane === "next").sort((a, b) => a.next_pos - b.next_pos);
+const itemActs = id => S.actions.filter(a => a.item_id === id && a.status !== "dismissed");
+// The plan: what doing this save means. Your pick, else the action that counts as doing it, else the first idea.
+function planOf(it) {
+  const acts = itemActs(it.id), open = acts.filter(a => a.status !== "done");
+  return acts.find(a => a.id === it.plan_action_id) || open.find(a => a.is_primary) || open.sort((x, y) => (x.resource_idx ?? 99) - (y.resource_idx ?? 99))[0] || null;
+}
+const daysIn = it => it.lane_at ? Math.floor((Date.now() - new Date(it.lane_at)) / 864e5) : 0;
+const goal = () => S.profile.weekly_goal || 3;
+const passMin = () => S.profile.pass_minutes || 15;
+const passTimer = () => { try { return localStorage.getItem("gsd_passtimer") === "1" } catch { return false } };
+const banked = () => S.passes.filter(p => p.source === "earned" && !p.started_at);
+const activePass = () => S.passes.find(p => p.ends_at && new Date(p.ends_at) > Date.now());
+const minsLeft = p => Math.max(1, Math.ceil((new Date(p.ends_at) - Date.now()) / 60000));
+// Weeks start on Monday. off = 0 is this week, 1 is last week.
+function weekStart(off = 0) { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - 7 * off); return d }
+const inWeek = (t, off) => { const x = new Date(t); return x >= weekStart(off) && (off === 0 || x < weekStart(off - 1)) };
+const finished = () => S.log.filter(l => l.outcome === "done");
+const weekDone = (off = 0) => finished().filter(l => inWeek(l.ended_at, off)).length;
+function streak() { let n = weekDone(0) >= goal() ? 1 : 0; for (let w = 1; w < 20; w++) { if (weekDone(w) >= goal()) n++; else break } return n }
+// Scrolling that went through GSD that week: passes, hunts and slips, in the minutes they actually ran.
+function weekScroll(off = 0) {
+  const ps = S.passes.filter(p => p.started_at && inWeek(p.started_at, off));
+  const minutes = ps.reduce((s, p) => s + Math.max(0, Math.round((Math.min(Date.now(), new Date(p.ends_at)) - new Date(p.started_at)) / 60000)), 0);
+  return { minutes, opened: ps.length, slips: ps.filter(p => p.source === "slip").length };
+}
+// Times the gate showed and you did not go on to scroll.
+const turnedBack = (off = 0) => Math.max(0, S.gates.filter(g => g.choice === "shown" && inWeek(g.created_at, off)).length - weekScroll(off).opened);
+function median(xs) { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2 }
+// How well a save fits a free slot today: time you have, the weekend, what you care about, what's been waiting.
+function fitScore(it) {
+  const p = S.profile, mins = p.daily_minutes || 15, pl = planOf(it), dow = new Date().getDay(), weekend = dow === 0 || dow === 6, sh = shelfOf(it).key, age = (Date.now() - new Date(it.created_at)) / 864e5;
   let s = 0;
-  if (a.status === "doing") s += 40;
-  if (a.planned_for === iso()) s += 25;
-  if (a.minutes <= mins) s += 20; else if (a.minutes > 2 * mins) s -= 15;
-  if (it) {
-    if ((p.interests || []).includes(it.area)) s += 15;
-    const age = (Date.now() - new Date(it.created_at)) / 864e5;
-    if (age <= 7) s += 12;
-    if (age > 30 && !S.actions.some(x => x.item_id === it.id && x.status === "done")) s += 8;
-    if (it.resaved_count > 0) s += 8;
-    if (it.note) s += 10;
-  }
-  if (S.challenges.some(c => c.mode === a.mode && chProgress(c) < c.target)) s += 10;
-  if (weekend && (a.mode === "experience" || a.context === "out")) s += 15;
-  if (!weekend && a.effort === "tiny") s += 5;
-  return s + hash(S.user.id + iso() + a.id);
+  if (pl) { s += 10; if (pl.minutes <= 2 * mins) s += 10 }
+  if ((p.interests || []).includes(it.area)) s += 15;
+  if (age <= 7) s += 12; else if (age > 30) s += 8;
+  if (it.resaved_count > 0) s += 8;
+  if (it.note) s += 10;
+  if (weekend && ["go", "cook", "move", "watch"].includes(sh)) s += 15;
+  if (!weekend && pl?.effort === "tiny") s += 5;
+  return s + 10 * hash(S.user.id + iso() + it.id);
 }
-const rank = exclude => openActs().filter(a => !exclude.includes(a.id)).sort((x, y) => score(y) - score(x));
-function focusAction() {
-  const f = S.focus;
-  if (f && f.state === "skipped") return null;
-  if (f && f.action_id) { const a = S.actions.find(x => x.id === f.action_id); if (a && a.status !== "dismissed") return a }
-  return rank([])[0] || null;
-}
+const candidates = () => S.items.filter(i => !i.lane && i.status !== "let_go" && i.stage === "ready" && !i.done_at && shelfOf(i).key !== "wisdom").sort((a, b) => fitScore(b) - fitScore(a));
 
 /* ---------- pieces ---------- */
-const thumb = (it, cls = "thumb") => `<div class="${cls}">${KIND[it.kind] || "✨"}${thumbUrl(it) ? `<img src="${esc(thumbUrl(it))}" alt="" loading="lazy" onerror="this.remove()">` : ""}</div>`;
-const tile = it => `<button class="tile" data-act="open" data-id="${it.id}">${thumb(it)}<div class="tx"><div class="t">${pending(it) ? '<span class="spin"></span> Reading…' : esc(it.title || it.url || "Untitled")}</div><div class="tiny">${esc(it.source || "")} · ${ago(it.created_at)}</div></div></button>`;
-function actRow(a, extra = "", here = false) {
-  const it = here ? null : item(a.item_id), m = MODE[a.mode] || MODE.grow; // here: shown inside its own save, so no "from" line or Source button
-  return `<div class="card"><div class="act"><div class="em" aria-hidden="true">${m[0]}</div><div class="bd">
-    <h3>${esc(a.title)}</h3><div class="small mute">${a.minutes} min · ${m[1]}${it ? ` · from “${esc((it.title || "").slice(0, 40))}”` : ""}</div>
+const thumb = (it, cls = "thumb", extra = "") => `<div class="${cls}">${KIND[it.kind] || "✨"}${thumbUrl(it) ? `<img src="${esc(thumbUrl(it))}" alt="" loading="lazy" onerror="this.remove()">` : ""}${extra}</div>`;
+const badge = it => it.lane === "now" ? `<span class="bdg now">⚡ Now</span>` : it.lane === "next" ? `<span class="bdg">⏭ Next</span>`
+  : it.done_at ? `<span class="bdg done">${it.rating ? RATE[it.rating][0] : "✓"} ${esc(doneVerb(it))}</span>` : "";
+const tile = it => { const sh = shelfOf(it); return `<button class="tile" data-act="open" data-id="${it.id}">${thumb(it, "thumb", badge(it))}<div class="tx"><div class="t">${pending(it) ? '<span class="spin"></span> Reading…' : esc(it.title || it.url || "Untitled")}</div><div class="tiny">${sh.em} ${esc(sh.name)} · ${ago(it.created_at)}</div></div></button>` };
+// One idea inside its save. The plan is the one that counts: finishing the save finishes it.
+function actRow(a, it) {
+  const m = MODE[a.mode] || MODE.grow, isPlan = planOf(it)?.id === a.id, link = safeUrl(a.link);
+  return `<div class="card${isPlan ? " plan" : ""}"><div class="act"><div class="em" aria-hidden="true">${isPlan ? "📌" : m[0]}</div><div class="bd">
+    <h3>${esc(a.title)}</h3><div class="small mute">${a.minutes} min · ${m[1]}${isPlan ? " · the plan" : ""}</div>
     ${a.why && a.status !== "done" ? `<p class="small" style="margin-top:8px">${esc(a.why)}</p>` : ""}
     ${a.status !== "done" && a.first_step ? `<p class="small" style="margin-top:8px"><b>Start:</b> ${esc(a.first_step)}</p>` : ""}
-    ${a.status === "doing" && a.steps?.length ? `<ul class="tk small">${a.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : ""}
+    ${isPlan && a.status !== "done" && a.steps?.length ? `<ul class="tk small">${a.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : ""}
     ${a.status === "done" ? `<div class="tiny" style="margin-top:6px">Done ${ago(a.done_at)}</div>` : ""}${a.reflection && !a.reflection.startsWith("dismissed:") && a.status !== "suggested" ? `<blockquote class="small" style="white-space:pre-wrap">${esc(a.reflection)}</blockquote>` : ""}
-    <div class="row" style="margin-top:12px">${extra || (a.status === "suggested" ? `<button class="btn sm" data-act="start" data-id="${a.id}">Do this</button><button class="btn sm ghost" data-act="dismiss" data-id="${a.id}">Not for me</button>`
-      : a.status === "doing" ? `<button class="btn sm keep" data-act="done" data-id="${a.id}">✅ GSD</button><button class="btn sm ghost" data-act="later" data-id="${a.id}">Later</button>` : "")}
-      ${a.status === "doing" || a.status === "done" ? `<button class="btn sm ghost" data-act="note" data-id="${a.id}">📝 Note</button>` : ""}
-      ${safeUrl(a.link) && a.status !== "done" ? `<a class="btn sm line" href="${esc(safeUrl(a.link))}" target="_blank" rel="noopener noreferrer">${esc(a.link_label || "Open it")} ↗</a>` : ""}
-      ${it ? `<button class="btn sm line" data-act="open" data-id="${it.id}">Source</button>` : ""}</div>
+    <div class="row" style="margin-top:12px">${a.status === "done" ? ""
+      : isPlan ? (it.lane === "now" ? `<button class="btn sm keep" data-act="finish" data-id="${it.id}">✓ Done</button>` : `<button class="btn sm" data-act="plan" data-id="${a.id}">⚡ Do this now</button>`)
+      : `<button class="btn sm${it.lane === "now" ? " ghost" : ""}" data-act="plan" data-id="${a.id}">${it.lane === "now" ? "📌 Make this the plan" : "⚡ Do this now"}</button><button class="btn sm ghost" data-act="dismiss" data-id="${a.id}">Not for me</button>`}
+      ${link && a.status !== "done" ? `<a class="btn sm line" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(a.link_label || "Open it")} ↗</a>` : ""}</div>
   </div></div></div>`;
 }
-function gauge(pct) {
-  const len = Math.PI * 100, off = len * (1 - pct / 100);
-  return `<div class="gauge" role="img" aria-label="${pct} percent of the saves you kept have been acted on"><svg viewBox="0 0 240 132"><defs><linearGradient id="gg" x1="0" x2="1"><stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#0284c7"/></linearGradient></defs>
-  <path d="M20 122 A100 100 0 0 1 220 122" fill="none" stroke="var(--track)" stroke-width="18" stroke-linecap="round"/>
-  ${pct > 0 ? `<path d="M20 122 A100 100 0 0 1 220 122" fill="none" class="arc" stroke="url(#gg)" stroke-width="18" stroke-linecap="round" stroke-dasharray="${len}" stroke-dashoffset="${off}"/>` : ""}</svg>
-  <div class="n"><b>${pct}<span style="font-size:22px">%</span></b><small>GSD RATIO</small></div></div>`;
+// The weekly gauge: one segment for each thing you want to finish from Now this week.
+function gauge(done, goal) {
+  const R = 100, cx = 120, cy = 122, pt = t => `${(cx + R * Math.cos(t)).toFixed(2)} ${(cy - R * Math.sin(t)).toFixed(2)}`, arc = (a, b) => `M${pt(a)} A${R} ${R} 0 0 1 ${pt(b)}`;
+  const hit = done >= goal, segs = goal <= 6 ? goal : 1, gap = segs > 1 ? .3 : 0, len = (Math.PI - gap * (segs - 1)) / segs;
+  let track = "", fill = "";
+  if (segs > 1) for (let k = 0; k < segs; k++) { const a = Math.PI - k * (len + gap), d = arc(a, a - len); track += `<path d="${d}" class="g-tr"/>`; if (k < done) fill += `<path d="${d}" class="g-on" style="animation-delay:${k * 140}ms"/>` }
+  else { const d = arc(Math.PI, 0), L = Math.PI * R, f = Math.min(1, done / goal); track = `<path d="${d}" class="g-tr"/>`; if (f > 0) fill = `<path d="${d}" class="g-on" stroke-dasharray="${L.toFixed(1)}" stroke-dashoffset="${(L * (1 - f)).toFixed(1)}"/>` }
+  return `<div class="gauge${hit ? " hit" : ""}" role="img" aria-label="${done} of ${goal} finished from Now this week"><svg viewBox="0 0 240 132"><defs><linearGradient id="gg" x1="0" x2="1"><stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#0284c7"/></linearGradient><linearGradient id="gh" x1="0" x2="1"><stop offset="0" stop-color="#4ade80"/><stop offset="1" stop-color="#16a34a"/></linearGradient></defs>${track}${fill}</svg>
+  <div class="n"><b>${done}<span>/${goal}</span></b><small>${hit ? "GOAL HIT THIS WEEK" : "DONE THIS WEEK"}</small></div></div>`;
 }
 
 /* ---------- views ---------- */
-function vHome() {
-  const f = focusAction(), ib = inbox(), du = dueCards(), dn = doneActs(), p = S.profile;
-  const doneToday = dn.some(a => iso(new Date(a.done_at)) === iso());
+function slotCard(it) {
+  const pl = planOf(it), d = daysIn(it), link = safeUrl(pl?.link), sh = shelfOf(it);
+  return `<article class="slot">
+    <button class="slot-hd" data-act="open" data-id="${it.id}">${thumb(it, "slot-th")}
+      <span class="slot-tx"><span class="tiny">${sh.em} ${esc(sh.name)} · ${d ? `${d} day${d > 1 ? "s" : ""} in Now` : "new in Now"}</span>
+      <b>${pending(it) ? '<span class="spin"></span> Reading…' : esc(it.title || "Untitled")}</b></span><span class="slot-n" aria-label="Slot ${it.slot}">${it.slot}</span></button>
+    ${pl ? `<div class="slot-plan"><b>${esc(pl.title)}</b> <span class="mute">· ${pl.minutes} min</span>${pl.first_step ? `<span class="slot-step">Start: ${esc(pl.first_step)}</span>` : ""}</div>`
+      : `<div class="slot-plan mute">${pending(it) ? "A plan shows up once it's read." : "No plan needed: just do it. Or open it to pick one."}</div>`}
+    ${d >= 7 ? `<p class="stale">${d} days in Now. Still the right one? Park it if not.</p>` : ""}
+    <div class="slot-acts"><button class="btn sm keep" data-act="finish" data-id="${it.id}">✓ Done</button>
+      ${link ? `<a class="btn sm ghost" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(pl.link_label || "Open it")} ↗</a>` : ""}
+      <button class="btn sm line" data-act="park" data-id="${it.id}" title="Move it to Up next">Park</button></div></article>`;
+}
+function emptySlot(n, sug) {
+  return `<article class="slot empty"><div class="slot-free"><span class="slot-n" aria-hidden="true">${n}</span><b>Free slot</b></div>
+    ${sug ? `<p class="tiny">${sug.lane === "next" ? "Next in line" : "A good fit from your library"}</p><button class="slot-pull" data-act="pull" data-id="${sug.id}" aria-label="Put ${esc(sug.title || "it")} in Now">${thumb(sug, "slot-th sm")}<span>${esc(sug.title || "Untitled")}</span><i aria-hidden="true">⚡</i></button>`
+      : `<p class="small mute">Save something worth doing, or share it here from Instagram.</p>`}
+    <div class="slot-acts"><button class="btn sm ghost" data-act="pick">Choose…</button><button class="btn sm line" data-act="save" data-id="now">+ New</button></div></article>`;
+}
+const nrow = (it, btn) => { const pl = planOf(it), sh = shelfOf(it); return `<div class="nrow">${thumb(it, "slot-th sm")}<button class="nrow-t" data-act="open" data-id="${it.id}"><b>${esc(it.title || "Untitled")}</b><span class="tiny">${sh.em} ${esc(pl ? pl.title : sh.name)}${it.done_at ? ` · ${esc(doneVerb(it).toLowerCase())} before` : ""}</span></button>${btn}</div>` };
+const nextRow = (it, k) => nrow(it, `<div class="nrow-b">${k ? `<button class="ib" data-act="nextup" data-id="${it.id}" aria-label="Move up" title="Move up">↑</button>` : ""}<button class="ib" data-act="pull" data-id="${it.id}" aria-label="Move into Now" title="Move into Now">⚡</button><button class="ib" data-act="tolib" data-id="${it.id}" aria-label="Back to the library" title="Back to the library">✕</button></div>`);
+function vNow() {
+  const nw = nowItems(), nx = nextItems(), p = S.profile, g = goal(), wd = weekDone(), st = streak(), bk = banked(), ap = activePass(), ib = inbox(), du = dueCards();
   const h = new Date().getHours(), hi = h < 5 ? "Still up" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
-  const recent = live().slice(0, 6), skipped = S.focus?.state === "skipped", swaps = S.focus?.swaps || 0;
-  return `<h1>${hi}. Actually <em>do</em><br>the stuff you save.</h1>
-  <div class="sec">${gauge(ratio())}<p class="small mute" style="text-align:center;margin-top:6px">${dn.length} done · ${S.items.filter(i => i.status === "kept").length} kept</p></div>
-  ${p.intention ? `<div class="sec"><span class="chip ${doneToday ? "g" : ""}">${doneToday ? "✅" : "🎯"} ${esc(p.intention)}${doneToday ? " — done today" : ""}</span></div>` : ""}
-  <div class="sec"><div class="hd"><h2>Today's focus</h2>${f && f.status !== "done" ? (swaps < 3 ? `<button class="small mute" data-act="swap">Swap</button>` : `<span class="tiny">That's all I have today</span>`) : ""}</div>
-    ${f ? (f.status === "done" ? `<div class="card soft"><h3>✅ ${esc(f.title)}</h3><p class="small mute" style="margin-top:4px">Done. That's today's thing.</p></div>`
-        : actRow(f, f.status === "doing" ? "" : `<button class="btn sm" data-act="start" data-id="${f.id}">Do this</button><button class="btn sm ghost" data-act="nottoday">Not today</button>`))
-      : `<div class="card soft"><p class="mute">${skipped ? "Nothing planned today. That's fine." : "Save something and a small thing to try will show up here."}</p></div>`}</div>
+  const pool = [...nx, ...candidates()], free = [1, 2, 3].filter(n => !nw.some(i => i.slot === n));
+  const recent = live().filter(i => !i.lane).slice(0, 4);
+  return `<h1>${hi}.<br>${nw.length ? `<em>${["", "One thing", "Two things", "Three things"][nw.length]}</em> in Now.` : `Now is <em>clear</em>.`}</h1>
+  <p class="mute" style="margin-top:8px">${nw.length ? `Finish one to earn ${passMin()} minutes of scrolling.` : finished().length ? "You cleared it. Scrolling is open for a hunt: go find what's next." : "Pick up to three things you'll actually do. Everything else can wait."}</p>
+  <div class="sec gwrap">${gauge(wd, g)}
+    <div class="chips gchips">${ap ? `<span class="chip b">⏱ <b data-left>${minsLeft(ap)}</b> min of scrolling left</span><button class="chip" data-act="endpass">End it now</button>`
+      : `<span class="chip${bk.length ? " g" : ""}">🎟️ ${bk.length ? `${bk.length} pass${bk.length > 1 ? "es" : ""} · ${bk.reduce((s, x) => s + x.minutes, 0)} min` : "No passes banked"}</span>`}
+      <span class="chip">🔥 ${st ? `${st}-week streak` : "No streak yet"}</span>
+      ${p.commitment !== "none" ? `<span class="chip">📵 Turned back ${turnedBack()}× this week</span>` : `<button class="chip" data-act="capsetup">📵 Set up the scroll gate</button>`}</div></div>
+  <div class="sec"><div class="hd"><h2>Now<span class="cnt">${nw.length}/3</span></h2><button class="small mute" data-act="rules">How it works</button></div>
+    <div class="slots">${[1, 2, 3].map(n => { const it = nw.find(i => i.slot === n); return it ? slotCard(it) : emptySlot(n, pool[free.indexOf(n)]) }).join("")}</div></div>
+  <div class="sec"><div class="hd"><h2>Up next<span class="cnt">${nx.length}/5</span></h2>${nx.length < 5 ? `<button class="small mute" data-act="pick" data-id="next">+ Add</button>` : ""}</div>
+    ${nx.length ? `<div class="nlist">${nx.map(nextRow).join("")}</div>` : `<p class="small mute">Line up what comes after Now. When a slot frees up, the first one here is ready to pull in.</p>`}</div>
   ${ib.length || du.length ? `<div class="sec"><div class="row">
     ${ib.length ? `<button class="btn ghost" data-act="triage">🗂️ Sort ${ib.length} new save${ib.length > 1 ? "s" : ""}</button>` : ""}
     ${du.length ? `<button class="btn ghost" data-act="review">🧠 Revisit ${du.length} idea${du.length > 1 ? "s" : ""}</button>` : ""}</div></div>` : ""}
   <div class="sec"><button class="field mute" style="text-align:left" data-act="ask">🔎 Ask your library anything…</button></div>
-  <div class="sec"><div class="hd"><h2>Recently saved</h2><button class="small mute" data-act="tab" data-id="library">All</button></div>
+  <div class="sec"><div class="hd"><h2>Recently saved</h2><button class="small mute" data-act="tab" data-id="library">Library</button></div>
     ${recent.length ? `<div class="grid">${recent.map(tile).join("")}</div>` : `<div class="card soft"><p class="mute">Nothing saved yet. Tap + and paste a link from Instagram, YouTube, TikTok or anywhere.</p></div>`}</div>`;
 }
 /* ---------- library folders: vanilla port of the glass-folder-cards component ----------
@@ -292,13 +369,19 @@ const GF_BACK = "M0 56A22 22 0 0 1 22 34L146 34C170 34 172 0 198 0L318 0A22 22 0
 const GF_FRONT = "M0 22A22 22 0 0 1 22 0L118 0C144 0 146 32 172 32L318 32A22 22 0 0 1 340 54L340 176A22 22 0 0 1 318 198L22 198A22 22 0 0 1 0 176Z";
 const gfSlot = (i, n) => n <= 1 ? 0 : (i / (n - 1)) * 2 - 1;
 const gfSeen = new Set(); // folders that have already assembled themselves once this session
+// Folders by shelf (what you'd do with it) or by area (what it's about).
 function gfFolders() {
-  const by = new Map(); for (const it of live()) { if (!by.has(it.area)) by.set(it.area, []); by.get(it.area).push(it) }
+  const by = S.lib === "areas" ? "area" : "shelf", m = new Map();
+  for (const it of live()) { const k = by === "area" ? it.area || "Unsorted" : shelfOf(it).key; if (!m.has(k)) m.set(k, []); m.get(k).push(it) }
   const used = {}, art = {};
-  for (const a of [...by.keys()].map(a => a || "Unsorted").sort()) { const s = Math.floor(hash("gf:" + a) * GF_PRESETS.length);
-    const p = [...GF_PRESETS.keys()].map(d => GF_PRESETS[(s + d) % GF_PRESETS.length]).reduce((b, p) => (used[p] || 0) < (used[b] || 0) ? p : b); used[p] = (used[p] || 0) + 1; art[a] = p }
-  return [...by.entries()].map(([area, items]) => ({ area: area || "Unsorted", art: art[area || "Unsorted"], items: items.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)) }))
-    .sort((a, b) => (b.area === "Wisdom") - (a.area === "Wisdom") || b.items.length - a.items.length || a.area.localeCompare(b.area));
+  for (const k of [...m.keys()].sort()) { const s = Math.floor(hash("gf:" + k) * GF_PRESETS.length);
+    const p = [...GF_PRESETS.keys()].map(d => GF_PRESETS[(s + d) % GF_PRESETS.length]).reduce((b, p) => (used[p] || 0) < (used[b] || 0) ? p : b); used[p] = (used[p] || 0) + 1; art[k] = p }
+  const last = k => k === "wisdom" || k === "Wisdom";
+  return [...m.entries()].map(([key, items]) => { const sh = by === "shelf" ? SHELF[key] : null, done = items.filter(i => key === "cook" ? tested(i) : i.done_at).length;
+    return { key, art: art[key], name: sh ? sh.name : key, label: sh ? `${sh.em} ${sh.name}` : `${key === "Wisdom" ? "💎 " : ""}${key}`,
+      meta: `${items.length} save${items.length === 1 ? "" : "s"}${sh?.done && done ? ` · ${done} ${key === "cook" ? "tested" : "done"}` : ""}`,
+      items: items.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)) } })
+    .sort((a, b) => last(a.key) - last(b.key) || b.items.length - a.items.length || a.name.localeCompare(b.name));
 }
 function gfSheet(it, v, n) {
   const r = gfRng(gfSeed(it.id)), src = thumbUrl(it), name = pending(it) ? "Reading…" : it.title || hostOf(it.url) || "Untitled";
@@ -309,21 +392,20 @@ function gfSheet(it, v, n) {
     <span class="gf-sheet-head"><span class="gf-sheet-name">${esc(name)}</span><span class="gf-sheet-meta">${esc(ago(it.created_at))}</span></span></button></div>`;
 }
 function gfFolder(f, i) {
-  const n = f.items.length, show = f.items.slice(0, 4).reverse(), preset = f.art, open = S.folder === f.area;
-  const label = `${n} save${n === 1 ? "" : "s"}`;
-  return `<div class="gf" data-act="gfopen" data-id="${esc(f.area)}" data-key="${esc(f.area)}" style="--d:${i * 110}ms"${open ? " data-open" : ""}${gfSeen.has(f.area) ? " data-entered" : ""}>
+  const n = f.items.length, show = f.items.slice(0, 4).reverse(), preset = f.art, open = S.folder === f.key;
+  return `<div class="gf" data-act="gfopen" data-id="${esc(f.key)}" data-key="${esc(f.key)}" style="--d:${i * 110}ms"${open ? " data-open" : ""}${gfSeen.has(f.key) ? " data-entered" : ""}>
   <div class="gf-stage"><div class="gf-tilt">
     <div class="gf-shadow" aria-hidden="true"></div>
-    <div class="gf-back" style="clip-path:path('${GF_BACK}')" aria-hidden="true"><canvas class="gf-art" data-art="${preset}" data-seed="${gfSeed(f.area) % 997}"></canvas><div class="gf-back-sheen"></div></div>
+    <div class="gf-back" style="clip-path:path('${GF_BACK}')" aria-hidden="true"><canvas class="gf-art" data-art="${preset}" data-seed="${gfSeed(f.key) % 997}"></canvas><div class="gf-back-sheen"></div></div>
     <svg class="gf-rim gf-back-rim" viewBox="0 0 340 272" aria-hidden="true"><path d="${GF_BACK}"/></svg>
     <div class="gf-front" style="clip-path:path('${GF_FRONT}')">
       <div class="gf-tint" aria-hidden="true"></div><div class="gf-spec" aria-hidden="true"></div>
       <svg class="gf-rim gf-front-rim" viewBox="0 0 340 198" aria-hidden="true"><path d="${GF_FRONT}" stroke="url(#gf-rim)"/></svg>
-      <button class="gf-hit" data-act="gfopen" data-id="${esc(f.area)}" aria-expanded="${open}" aria-label="${open ? "Close" : "Open"} ${esc(f.area)}, ${label}"></button>
-      <div class="gf-label"><span class="gf-title">${f.area === "Wisdom" ? "💎 " : ""}${esc(f.area)}</span><span class="gf-meta">${label}</span></div>
+      <button class="gf-hit" data-act="gfopen" data-id="${esc(f.key)}" aria-expanded="${open}" aria-label="${open ? "Close" : "Open"} ${esc(f.name)}, ${esc(f.meta)}"></button>
+      <div class="gf-label"><span class="gf-title">${esc(f.label)}</span><span class="gf-meta">${esc(f.meta)}</span></div>
     </div>
-    <div class="gf-files" role="list" aria-label="Latest in ${esc(f.area)}"${open ? "" : " inert"}>${show.map((it, v) => gfSheet(it, v, show.length)).join("")}</div>
-    <button class="gf-key" data-act="area" data-id="${esc(f.area)}" aria-label="Show all ${label} in ${esc(f.area)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M12.5 6l6 6-6 6"/></svg></button>
+    <div class="gf-files" role="list" aria-label="Latest in ${esc(f.name)}"${open ? "" : " inert"}>${show.map((it, v) => gfSheet(it, v, show.length)).join("")}</div>
+    <button class="gf-key" data-act="grp" data-id="${esc(f.key)}" aria-label="Show all ${n} in ${esc(f.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M12.5 6l6 6-6 6"/></svg></button>
   </div></div></div>`;
 }
 let gfRO = null, gfIO = null;
@@ -362,25 +444,35 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && S.folder &
 
 function libList() {
   const q = S.q.toLowerCase().trim();
-  if (S.lib === "folders" && !S.area && !q) { const fs = gfFolders();
-    return fs.length ? `<div class="folders">${fs.map(gfFolder).join("")}</div>` : `<div class="card soft"><p class="mute">Nothing saved yet. Tap + and paste a link from Instagram, YouTube, TikTok or anywhere. Your saves sort themselves into folders here.</p></div>` }
-  let l = S.lib === "inbox" ? S.items.filter(i => i.status === "inbox") : S.lib === "let_go" ? S.items.filter(i => i.status === "let_go") : live();
+  if ((S.lib === "shelves" || S.lib === "areas") && !S.area && !S.shelf && !q) { const fs = gfFolders();
+    return fs.length ? `<div class="folders">${fs.map(gfFolder).join("")}</div>` : `<div class="card soft"><p class="mute">Nothing saved yet. Tap + and paste a link from Instagram, YouTube, TikTok or anywhere. Saves sort themselves onto shelves here: Watch, Cook, Go, Read…</p></div>` }
+  let l = S.lib === "inbox" ? S.items.filter(i => i.status === "inbox" && !i.lane) : S.lib === "let_go" ? S.items.filter(i => i.status === "let_go")
+    : S.lib === "done" ? live().filter(i => i.done_at).sort((a, b) => new Date(b.done_at) - new Date(a.done_at)) : live();
   if (S.area) l = l.filter(i => i.area === S.area);
-  if (q) l = l.filter(i => [i.title, i.summary, i.note, i.source, i.area, ...(i.tags || []), ...(i.takeaways || []).map(t => t.text)].join(" ").toLowerCase().includes(q));
-  return l.length ? `<div class="grid">${l.map(tile).join("")}</div>` : `<p class="mute" style="padding:30px 0;text-align:center">${q ? "Nothing matches. Try Ask for questions in your own words." : "Nothing here."}</p>`;
+  if (S.shelf) {
+    const sh = SHELF[S.shelf]; l = l.filter(i => shelfOf(i).key === S.shelf);
+    if (sh.done && S.shelfTab === "todo") l = l.filter(i => !i.done_at);
+    if (sh.done && S.shelfTab === "done") l = l.filter(i => S.shelf === "cook" ? tested(i) : i.done_at).sort((a, b) => (b.rating === "loved") - (a.rating === "loved") || b.done_count - a.done_count || new Date(b.done_at) - new Date(a.done_at));
+  }
+  if (q) l = l.filter(i => [i.title, i.summary, i.note, i.done_note, i.source, i.area, i.kind, shelfOf(i).name, ...(i.tags || []), ...(i.takeaways || []).map(t => t.text), ...(i.resources || []).map(r => r.title)].join(" ").toLowerCase().includes(q));
+  const empty = S.shelf && S.shelfTab === "done" ? (S.shelf === "cook" ? "Recipes you cook and rate 😍 or 👍 collect here. Your tried & tested ones." : `Nothing ${SHELF[S.shelf].done.toLowerCase()} yet.`) : q ? "Nothing matches. Try Ask for questions in your own words." : "Nothing here.";
+  return l.length ? `<div class="grid">${l.map(tile).join("")}</div>` : `<p class="mute" style="padding:30px 0;text-align:center">${empty}</p>`;
 }
 function vLibrary() {
-  const n = S.area ? live().filter(i => i.area === S.area).length : 0;
+  const sh = S.shelf && SHELF[S.shelf], inShelf = sh ? live().filter(i => shelfOf(i).key === sh.key) : [], nArea = S.area ? live().filter(i => i.area === S.area).length : 0;
+  const nDone = sh ? inShelf.filter(i => sh.key === "cook" ? tested(i) : i.done_at).length : 0, nTodo = inShelf.filter(i => !i.done_at).length;
   return `<h1>Library</h1>
   <div class="sec"><input class="field search" id="q" type="search" placeholder="Search your saves" value="${esc(S.q)}" aria-label="Search your saves"></div>
-  <div class="scroll" style="margin-top:12px">${[["folders", "🗂️ Folders"], ["all", "All"], ["inbox", "Unsorted"], ["let_go", "Let go"]].map(([k, t]) => `<button class="chip ${S.lib === k && !S.area ? "on" : ""}" data-act="lib" data-id="${k}">${t}</button>`).join("")}</div>
-  ${S.area ? `<div class="crumb sec"><button class="chip" data-act="lib" data-id="folders" aria-label="Back to folders">←</button><h2>${S.area === "Wisdom" ? "💎 " : ""}${esc(S.area)}</h2><span class="small mute">${n} save${n === 1 ? "" : "s"}</span></div>` : ""}
-  <div class="${S.area ? "" : "sec"}" id="libgrid" style="${S.area ? "margin-top:14px" : ""}">${libList()}</div>`;
+  <div class="scroll" style="margin-top:12px">${[["shelves", "🗂️ Shelves"], ["areas", "🏷️ Areas"], ["all", "All"], ["done", "✓ Done"], ["inbox", "Unsorted"], ["let_go", "Let go"]].map(([k, t]) => `<button class="chip ${S.lib === k && !S.area && !S.shelf ? "on" : ""}" data-act="lib" data-id="${k}">${t}</button>`).join("")}</div>
+  ${sh ? `<div class="crumb sec"><button class="chip" data-act="lib" data-id="shelves" aria-label="Back to shelves">←</button><h2>${sh.em} ${esc(sh.name)}</h2><span class="small mute">${inShelf.length} save${inShelf.length === 1 ? "" : "s"}</span></div>
+    ${sh.done ? `<div class="scroll" style="margin-top:12px">${[["todo", `${sh.todo} (${nTodo})`], ["done", `${sh.key === "cook" ? "⭐" : "✓"} ${sh.done} (${nDone})`], ["all", "All"]].map(([k, t]) => `<button class="chip ${S.shelfTab === k ? "on" : ""}" data-act="shtab" data-id="${k}">${t}</button>`).join("")}</div>` : ""}` : ""}
+  ${S.area ? `<div class="crumb sec"><button class="chip" data-act="lib" data-id="areas" aria-label="Back to areas">←</button><h2>${S.area === "Wisdom" ? "💎 " : ""}${esc(S.area)}</h2><span class="small mute">${nArea} save${nArea === 1 ? "" : "s"}</span></div>` : ""}
+  <div class="${S.area || sh ? "" : "sec"}" id="libgrid" style="${S.area || sh ? "margin-top:14px" : ""}">${libList()}</div>`;
 }
 function feed() {
-  const ready = live().filter(i => i.stage === "ready");
+  const ready = live().filter(i => i.stage === "ready" && !i.lane);
   if (S.mode === "learn") return ready.filter(i => S.cards.some(c => c.item_id === i.id)).slice(0, 10);
-  if (S.mode === "experience") return ready.filter(i => ["place", "recipe", "event", "workout", "product"].includes(i.kind) || S.actions.some(a => a.item_id === i.id && a.mode === "experience" && a.status !== "done")).slice(0, 10);
+  if (S.mode === "go") return ready.filter(i => ["go", "cook", "move", "watch"].includes(shelfOf(i).key) && !i.done_at).slice(0, 10);
   const forgotten = [...ready].sort((a, b) => (a.opened_count - b.opened_count) || (new Date(a.last_surfaced_at || 0) - new Date(b.last_surfaced_at || 0)));
   const recent = ready.filter(i => Date.now() - new Date(i.created_at) < 7 * 864e5).slice(0, 2);
   const wild = [...ready].sort((a, b) => hash(iso() + a.id) - hash(iso() + b.id)).slice(0, 1);
@@ -388,50 +480,61 @@ function feed() {
   return out.slice(0, S.more ? 15 : 10);
 }
 function vExplore() {
-  const modes = [["inspire", "✨ Inspiration"], ["do", "⚡ Action"], ["learn", "🧠 Learning"], ["experience", "📍 Experience"]];
-  let body;
-  if (S.mode === "do") { const o = rank([]).slice(0, 8); body = o.length ? `<div class="stack">${o.map(a => actRow(a)).join("")}</div>` : `<p class="mute">No open ideas right now.</p>` }
-  else {
-    const l = feed();
-    body = l.length ? `<div class="feed">${l.map(it => {
-      const c = S.cards.find(x => x.item_id === it.id), pl = it.entities?.place;
-      return `<article class="fcard" data-seen="${it.id}">${thumb(it)}<div class="in">
-        <div class="tiny">${KIND[it.kind] || ""} ${esc(it.source || "")} · saved ${ago(it.created_at)}${it.opened_count ? "" : " · not opened since"}</div>
+  const modes = [["inspire", "✨ Inspiration"], ["go", "📍 Things to do"], ["learn", "🧠 Learning"]], l = feed();
+  const body = l.length ? `<div class="feed">${l.map(it => {
+      const c = S.cards.find(x => x.item_id === it.id), pl = it.entities?.place, sh = shelfOf(it);
+      return `<article class="fcard" data-seen="${it.id}">${thumb(it, "thumb", badge(it))}<div class="in">
+        <div class="tiny">${sh.em} ${esc(sh.name)} · ${esc(it.source || "")} · saved ${ago(it.created_at)}${it.opened_count ? "" : " · not opened since"}</div>
         ${S.mode === "learn" && c ? `<p class="ins" style="margin-top:8px">${esc(c.q)}</p><details style="margin-top:10px"><summary class="small mute">Show answer</summary><p style="margin-top:8px">${esc(c.a)}</p></details>`
           : `<p class="ins" style="margin-top:8px">${esc(it.insight || it.summary || it.title)}</p>`}
         <p class="small mute" style="margin-top:10px">${esc(it.title)}</p>
-        <div class="row" style="margin-top:14px"><button class="btn sm" data-act="makeact" data-id="${it.id}">⚡ Do something with it</button><button class="btn sm ghost" data-act="open" data-id="${it.id}">Open</button>
-        ${S.mode === "experience" && pl?.name ? `<a class="btn sm line" target="_blank" rel="noopener noreferrer" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([pl.name, pl.address, pl.city].filter(Boolean).join(" "))}">Maps</a>` : ""}</div>
+        <div class="row" style="margin-top:14px"><button class="btn sm" data-act="pull" data-id="${it.id}">⚡ Now</button><button class="btn sm ghost" data-act="tonext" data-id="${it.id}">⏭ Up next</button><button class="btn sm ghost" data-act="open" data-id="${it.id}">Open</button>
+        ${S.mode === "go" && pl?.name ? `<a class="btn sm line" target="_blank" rel="noopener noreferrer" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([pl.name, pl.address, pl.city].filter(Boolean).join(" "))}">Maps</a>` : ""}</div>
       </div></article>`}).join("")}
-      <div class="card soft" style="text-align:center"><h3>That's enough for now.</h3><p class="small mute" style="margin-top:4px">This feed ends on purpose. Pick one thing and go do it.</p>
+      <div class="card soft" style="text-align:center"><h3>That's enough for now.</h3><p class="small mute" style="margin-top:4px">This feed ends on purpose. Put one thing in Now and go do it.</p>
       ${S.mode === "inspire" && !S.more && live().length > 10 ? `<button class="btn sm ghost" style="margin-top:10px" data-act="more">Five more</button>` : ""}</div></div>`
-      : `<p class="mute">Nothing to show in this mode yet.</p>`;
-  }
-  return `<h1>Explore <em>your own</em> saves</h1><div class="scroll sec">${modes.map(([k, n]) => `<button class="chip ${S.mode === k ? "on" : ""}" data-act="mode" data-id="${k}">${n}</button>`).join("")}</div><div class="sec">${body}</div>`;
+    : `<p class="mute">Nothing to show in this mode yet.</p>`;
+  return `<h1>Explore <em>your own</em> saves</h1><p class="mute" style="margin-top:8px">A feed that ends, made only of things you chose.</p><div class="scroll sec">${modes.map(([k, n]) => `<button class="chip ${S.mode === k ? "on" : ""}" data-act="mode" data-id="${k}">${n}</button>`).join("")}</div><div class="sec">${body}</div>`;
 }
-function vActions() {
-  const doing = S.actions.filter(a => a.status === "doing"), ideas = rank([]).filter(a => a.status === "suggested"), dn = doneActs().sort((a, b) => new Date(b.done_at) - new Date(a.done_at));
-  const list = S.actTab === "doing" ? doing : S.actTab === "ideas" ? ideas.slice(0, 30) : dn;
-  return `<h1>Actions</h1>
-  <div class="sec"><div class="hd"><h2>Challenges</h2><button class="small mute" data-act="newch">+ New</button></div>
-    ${S.challenges.length ? `<div class="stack">${S.challenges.map(c => { const p = chProgress(c); return `<div class="card"><div class="row" style="justify-content:space-between"><h3>${esc(c.title)}</h3><button class="tiny" data-act="delch" data-id="${c.id}" aria-label="Remove challenge">✕</button></div>
-      <div class="bar" style="margin:10px 0 6px"><i style="width:${Math.min(100, 100 * p / c.target)}%"></i></div><div class="tiny">${Math.min(p, c.target)} of ${c.target} this ${c.period}${p >= c.target ? " · done 🎉" : ""}</div></div>` }).join("")}</div>`
-      : `<p class="small mute">Optional. A light goal like “three creative experiments this week”.</p>`}</div>
-  <div class="scroll sec">${[["doing", `Doing (${doing.length})`], ["ideas", `Ideas (${ideas.length})`], ["done", `Done (${dn.length})`]].map(([k, n]) => `<button class="chip ${S.actTab === k ? "on" : ""}" data-act="acttab" data-id="${k}">${n}</button>`).join("")}
-    <button class="chip" data-act="ownact">+ Your own</button></div>
-  <div class="sec stack">${list.length ? list.map(a => actRow(a)).join("") : `<p class="mute">${S.actTab === "doing" ? "Nothing in progress. Pick an idea when you feel like it." : S.actTab === "ideas" ? "Ideas appear when you save things." : "Things you've done will collect here."}</p>`}</div>`;
+// Eight weeks of finishing from Now, against the weekly goal, with the scrolling that went through passes.
+function weeksChart() {
+  const W = 8, g = goal(), data = Array.from({ length: W }, (_, k) => { const off = W - 1 - k; return { off, d: weekStart(off), done: weekDone(off), mins: weekScroll(off).minutes } });
+  const max = Math.max(g, ...data.map(x => x.done), 1), bw = 26, gw = 14, H = 110, top = 16, base = top + H, w = W * bw + (W - 1) * gw, y = v => base - (v / max) * H;
+  const bars = data.map((x, k) => { const xx = k * (bw + gw), hgt = x.done ? Math.max(6, base - y(x.done)) : 0;
+    return `<rect x="${xx}" y="${base - Math.max(hgt, 3)}" width="${bw}" height="${Math.max(hgt, 3)}" rx="${hgt ? 7 : 1.5}" class="${x.done >= g ? "wk-hit" : x.done ? "wk-bar on" : "wk-bar"}"/>${x.done ? `<text x="${xx + bw / 2}" y="${base - hgt - 6}" class="wk-v">${x.done}</text>` : ""}
+      <text x="${xx + bw / 2}" y="${base + 16}" class="wk-l">${x.off ? x.d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "This wk"}</text>
+      <text x="${xx + bw / 2}" y="${base + 31}" class="wk-l">${x.mins ? `⏱ ${x.mins}` : "·"}</text>` }).join("");
+  return `<figure class="wk"><svg viewBox="-6 0 ${w + 12} ${base + 38}" role="img" aria-label="Finished from Now per week, oldest first: ${data.map(x => x.done).join(", ")}. Goal: ${g} a week.">
+    <line x1="-6" x2="${w + 6}" y1="${y(g)}" y2="${y(g)}" class="wk-goal"/><text x="${w + 6}" y="${y(g) - 5}" class="wk-gl">goal ${g}</text>${bars}</svg>
+    <figcaption class="tiny">Bars: things finished from Now each week. ⏱ minutes of scrolling through GSD passes.</figcaption></figure>`;
 }
 function vProfile() {
-  const p = S.profile, dn = doneActs(), by = m => dn.filter(a => a.mode === m).length, l = live(), rev = l.filter(i => i.opened_count > 0).length;
+  const p = S.profile, fin = finished(), md = median(fin.map(l => (new Date(l.ended_at) - new Date(l.started_at)) / 864e5)), ws = weekScroll();
+  const parked = S.log.filter(l => l.outcome === "parked" || l.outcome === "dropped").length, timer = passTimer();
   return `<h1>You</h1>
   ${p.onboarded_at ? "" : `<div class="banner sec">Welcome. Pick what you care about and write a line about your goals; every suggestion GSD makes is fitted to this.</div>`}
-  <div class="sec"><div class="hd"><h2>What you've actually done</h2></div><div class="grid">
-    <div class="stat"><b>${by("grow")}</b><span class="small mute">ideas applied</span></div>
-    <div class="stat"><b>${by("experience")}</b><span class="small mute">experiences tried</span></div>
-    <div class="stat"><b>${by("create") + by("build")}</b><span class="small mute">things made</span></div>
-    <div class="stat"><b>${by("learn")}</b><span class="small mute">things learned</span></div>
-    <div class="stat"><b>${l.length ? Math.round(100 * rev / l.length) : 0}%</b><span class="small mute">of saves revisited</span></div>
-    <div class="stat"><b>${S.items.filter(i => i.status === "let_go").length}</b><span class="small mute">let go</span></div></div></div>
+  <div class="sec"><div class="hd"><h2>Your focus</h2><span class="small mute">last 8 weeks</span></div>
+    ${weeksChart()}
+    <div class="grid" style="margin-top:16px">
+      <div class="stat"><b>${fin.length}</b><span class="small mute">finished from Now</span></div>
+      <div class="stat"><b>${md == null ? "–" : md < 1 ? "<1" : Math.round(md)}</b><span class="small mute">days to finish, typically</span></div>
+      <div class="stat"><b>${ws.minutes}</b><span class="small mute">min scrolled through GSD this week</span></div>
+      <div class="stat"><b>${turnedBack()}</b><span class="small mute">times you turned back this week</span></div>
+      <div class="stat"><b>${ws.slips}</b><span class="small mute">${ws.slips === 1 ? "slip" : "slips"} this week</span></div>
+      <div class="stat"><b>${parked}</b><span class="small mute">parked or dropped</span></div></div>
+    ${fin.length ? `<h3 style="margin-top:20px">Recently finished</h3><div class="stack" style="margin-top:10px;gap:8px">${fin.slice(0, 6).map(l => `<button class="frow" ${l.item_id && item(l.item_id) ? `data-act="open" data-id="${l.item_id}"` : "disabled"}><span aria-hidden="true">${KIND[l.kind] || "✨"}</span><b>${esc(l.title || "Untitled")}</b><span class="tiny">${l.rating ? RATE[l.rating][0] + " " : ""}${ago(l.ended_at)}</span></button>`).join("")}</div>` : ""}</div>
+  <div class="sec"><div class="hd"><h2>The rules</h2><button class="small mute" data-act="rules">How it works</button></div>
+    <label class="l" for="wg" style="margin-top:0">Weekly goal: things finished from Now</label>
+    <select class="field" id="wg" data-save="weekly_goal">${[1, 2, 3, 4, 5, 6, 7, 10, 14].map(n => `<option value="${n}" ${goal() == n ? "selected" : ""}>${n} a week</option>`).join("")}</select>
+    <label class="l" for="pm">One scroll pass is</label>
+    <select class="field" id="pm" data-save="pass_minutes">${[5, 10, 15, 20, 30, 45].map(n => `<option value="${n}" ${passMin() == n ? "selected" : ""}>${n} minutes</option>`).join("")}</select>
+    <label class="l" for="pc">Passes you can bank</label>
+    <select class="field" id="pc" data-save="pass_cap">${[1, 2, 3, 4, 5].map(n => `<option value="${n}" ${(p.pass_cap || 3) == n ? "selected" : ""}>${n}</option>`).join("")}</select>
+    <label class="l" for="intention">What the gate says (optional)</label>
+    <input class="field" id="intention" data-save="intention" placeholder="e.g. Do the thing, then scroll." value="${esc(p.intention)}">
+    <div class="row" style="margin-top:12px"><button class="chip ${p.commitment !== "none" ? "on" : ""}" data-act="commit">${p.commitment !== "none" ? "✓ " : ""}Scroll gate on Instagram, YouTube and TikTok</button>
+      <button class="chip ${timer ? "on" : ""}" data-act="passtimer">${timer ? "✓ " : ""}Ring when a pass ends (this phone)</button></div>
+    <p class="tiny" style="margin-top:8px">The gate needs a one-time iPhone automation: <button class="tiny" style="text-decoration:underline" data-act="capsetup">set it up</button>. “Open anyway” always works, and counts as a slip.</p></div>
   <div class="sec"><div class="hd"><h2>What you care about</h2></div>
     <div class="chips">${(p.areas || []).map(a => `<button class="chip ${p.interests?.includes(a) ? "on" : ""}" data-act="interest" data-id="${esc(a)}">${esc(a)}</button>`).join("")}</div>
     <label class="l" for="goals">The life you're building, in a sentence or two</label>
@@ -443,41 +546,49 @@ function vProfile() {
     <label class="l" for="country">Your country (links go to its version of a site when there is one)</label>
     <input class="field" id="country" data-save="country" value="${esc(p.country ?? "Denmark")}" placeholder="e.g. Denmark">
     <label class="l" for="prefs">Standing instructions for the AI</label>
-    <textarea class="field" id="prefs" data-save="preferences" placeholder="e.g. Prefer free sources. Skip crypto. Suggest things I can do with my kids.">${esc(p.preferences ?? "")}</textarea></div>
-  <div class="sec"><div class="hd"><h2>Intentional scrolling</h2></div>
-    <label class="l" for="intention" style="margin-top:0">Your intention (optional)</label>
-    <input class="field" id="intention" data-save="intention" placeholder="e.g. One small action before I scroll" value="${esc(p.intention)}">
-    <div class="row" style="margin-top:12px"><button class="chip ${p.commitment === "action_first" ? "on" : ""}" data-act="commit">${p.commitment === "action_first" ? "✓ " : ""}Pause before social apps (gate)</button>
-    <button class="chip ${p.auto_remember ? "on" : ""}" data-act="autorem">${p.auto_remember ? "✓ " : ""}Help me remember what I learn, automatically</button></div>
-    <p class="tiny" style="margin-top:8px">Never enforced, never counted against you.</p></div>
+    <textarea class="field" id="prefs" data-save="preferences" placeholder="e.g. Prefer free sources. Skip crypto. Suggest things I can do with my girlfriend.">${esc(p.preferences ?? "")}</textarea></div>
   <div class="sec"><div class="hd"><h2>Reading and AI</h2></div>
     ${(() => { const sp = spend(); return `<div class="card soft"><div class="row" style="justify-content:space-between"><h3>≈ $${sp.total.toFixed(2)} this month</h3><span class="small mute">guide: $${BUDGET}</span></div>
       <div class="bar" style="margin:10px 0 6px"><i style="width:${Math.min(100, 100 * sp.total / BUDGET)}%"></i></div>
       <div class="tiny">${sp.saves} save${sp.saves === 1 ? "" : "s"} read${sp.saves ? ` · about $${(sp.total / sp.saves).toFixed(2)} each` : ""}. An estimate from token counts; your OpenAI bill is the real number. Nothing is blocked at $${BUDGET}. Transcripts are billed separately by Supadata.</div></div>` })()}
-    <div class="row" style="margin-top:12px"><button class="chip ${p.watch_video !== false ? "on" : ""}" data-act="watch">${p.watch_video !== false ? "✓ " : ""}Watch short videos too (reads on-screen text)</button></div>
+    <div class="row" style="margin-top:12px"><button class="chip ${p.watch_video !== false ? "on" : ""}" data-act="watch">${p.watch_video !== false ? "✓ " : ""}Watch short videos too (reads on-screen text)</button>
+      <button class="chip ${p.auto_remember ? "on" : ""}" data-act="autorem">${p.auto_remember ? "✓ " : ""}Help me remember what I learn</button></div>
     <p class="tiny" style="margin-top:8px">Watching uses about 5 extra Supadata credits per minute of video. Clips up to 3 minutes only.</p></div>
   <div class="sec"><div class="hd"><h2>Appearance</h2></div>
     <div class="chips">${[["auto", "Match my device"], ["light", "☀️ Light"], ["dark", "🌙 Dark"]].map(([k, n]) => `<button class="chip ${themePref() === k ? "on" : ""}" data-act="theme" data-id="${k}">${n}</button>`).join("")}</div></div>
   <div class="sec"><div class="hd"><h2>Save from anywhere</h2></div>
-    <div class="row"><button class="btn ghost" data-act="capsetup">📱 Set up iPhone share sheet</button></div>
+    <div class="row"><button class="btn ghost" data-act="capsetup">📱 Set up the iPhone share sheet and gate</button></div>
     <p class="small mute" style="margin-top:10px"><b>Computer:</b> add a bookmark with this address, then click it on any page:</p>
     <code class="small" style="word-break:break-all;display:block;margin-top:6px">javascript:location.href='${esc(location.origin + location.pathname)}?url='+encodeURIComponent(location.href)</code></div>
   <div class="sec row"><span class="small mute">${esc(S.user?.email || "")}</span><button class="btn sm ghost" data-act="signout">Sign out</button></div>`;
 }
 
 /* ---------- sheets ---------- */
+function pickList() {
+  const s = S.sheet, q = (s.q || "").toLowerCase().trim(), nx = s.lane === "now" ? nextItems() : [];
+  const pool = q ? live().filter(i => !i.lane && i.stage === "ready" && [i.title, i.summary, i.kind, shelfOf(i).name, ...(i.tags || [])].join(" ").toLowerCase().includes(q)).slice(0, 20) : candidates().slice(0, 8);
+  const row = it => nrow(it, `<button class="btn sm" data-act="pickit" data-id="${it.id}">${s.lane === "next" ? "⏭ Add" : "⚡ Now"}</button>`);
+  return `${nx.length && !q ? `<div class="tiny" style="margin:16px 0 6px">Up next</div><div class="nlist">${nx.map(row).join("")}</div>` : ""}
+    <div class="tiny" style="margin:16px 0 6px">${q ? "Matches" : "Good fits for today"}</div>${pool.length ? `<div class="nlist">${pool.map(row).join("")}</div>` : `<p class="small mute">${q ? "Nothing matches." : "Nothing waiting in your library. Save something first."}</p>`}`;
+}
+const gateRow = it => nrow(it, `<button class="btn sm keep" data-act="finish" data-id="${it.id}" aria-label="Mark ${esc(it.title || "it")} as done">✓</button>`);
 function sheetHtml() {
   const s = S.sheet; if (!s) return "";
   if (s.type === "item") return itemView(item(s.id));
   let b = "";
-  if (s.type === "save") b = `<h2>Save <em>anything</em></h2><p class="small mute" style="margin-top:4px">Paste a link, or write a note, quote or idea.</p>
+  if (s.type === "save") { const free = 3 - nowItems().length, lane = s.lane || "library";
+    b = `<h2>Save <em>anything</em></h2><p class="small mute" style="margin-top:4px">Paste a link, or write a note, an idea or something to do.</p>
     <label class="l" for="sv">Link or text</label><textarea class="field" id="sv" placeholder="https://www.instagram.com/reel/…">${esc(s.val || "")}</textarea>
-    <label class="l" for="sn">Why are you saving it? (optional)</label><input class="field" id="sn" placeholder="e.g. try this at the weekend">
-    <div class="row" style="margin-top:16px"><button class="btn" data-act="dosave" ${S.busy ? "disabled" : ""}>Save</button>
-    <label class="btn ghost" style="cursor:pointer">🖼️ Add image<input type="file" id="img" accept="image/*" hidden></label><button class="btn ghost" data-act="close">Cancel</button></div>`;
-  if (s.type === "triage") { const it = inbox()[0];
+    <label class="l" for="sn">Why are you saving it? (optional)</label><input class="field" id="sn" placeholder="e.g. try this at the weekend" value="${esc(s.note || "")}">
+    <label class="l">Where does it go?</label>
+    <div class="seg" role="radiogroup" aria-label="Where it goes">${[["now", `⚡ Now${free ? ` · ${free} free` : " · full"}`], ["next", "⏭ Up next"], ["library", "📚 Library"]].map(([k, n]) => `<button role="radio" aria-checked="${lane === k}" class="${lane === k ? "on" : ""}" data-act="savelane" data-id="${k}">${n}</button>`).join("")}</div>
+    <p class="tiny" style="margin-top:8px">${lane === "now" ? (free ? "It becomes one of your three. Finishing it earns a scroll pass." : "Now is full, so it goes first in Up next. Swap it in when a slot frees up.") : lane === "next" ? "It waits in line for a free slot." : "It goes on a shelf. Pull it into Now whenever you're ready."}</p>
+    <div class="row" style="margin-top:16px"><button class="btn" data-act="dosave" ${S.busy ? "disabled" : ""}>${S.busy ? '<span class="spin"></span> Saving' : "Save"}</button>
+    <label class="btn ghost" style="cursor:pointer">🖼️ Add image<input type="file" id="img" accept="image/*" hidden></label><button class="btn ghost" data-act="close">Cancel</button></div>` }
+  if (s.type === "triage") { const it = inbox()[0], free = 3 - nowItems().length;
     b = it ? `<div class="tiny">${inbox().length} to sort</div>${thumb(it, "thumb hero")}<h2>${esc(it.title)}</h2><p class="mute" style="margin-top:8px">${esc(it.insight || it.summary || "")}</p>
-      <div class="row" style="margin-top:18px"><button class="btn keep" style="flex:1" data-act="keep" data-id="${it.id}">💚 Keep</button><button class="btn drop" style="flex:1" data-act="letgo" data-id="${it.id}">🗑️ Let go</button></div>
+      <div class="tri"><button class="btn" data-act="tlane" data-id="${it.id}|now">⚡ Now${free ? "" : " (swap)"}</button><button class="btn ghost" data-act="tlane" data-id="${it.id}|next">⏭ Up next</button>
+        <button class="btn keep" data-act="tlane" data-id="${it.id}|lib">📚 Library</button><button class="btn drop" data-act="tlane" data-id="${it.id}|let">🍃 Let go</button></div>
       <p class="tiny" style="margin-top:10px;text-align:center">Letting go is good. A smaller library gets used.</p>`
       : `<h2>All sorted.</h2><p class="mute" style="margin-top:6px">Your library only holds things you chose to keep.</p><button class="btn" style="margin-top:16px" data-act="close">Done</button>` }
   if (s.type === "review") { const c = dueCards()[0];
@@ -486,45 +597,87 @@ function sheetHtml() {
       ${s.show ? `<div class="card soft" style="margin-top:14px">${esc(c.a)}</div>
         <div class="row" style="margin-top:16px"><button class="btn keep" style="flex:1" data-act="rc" data-id="${c.id}|got">Got it</button><button class="btn ghost" style="flex:1" data-act="rc" data-id="${c.id}|almost">Almost</button><button class="btn ghost" style="flex:1" data-act="rc" data-id="${c.id}|forgot">Forgot</button></div>`
         : `<button class="btn" style="margin-top:16px" data-act="reveal">Show answer</button>`}` }
-  if (s.type === "done") { const a = S.actions.find(x => x.id === s.id), noteOnly = s.mode === "note", text = s.text ?? a.reflection ?? "";
-    b = `${noteOnly ? `<h2>Note</h2>` : `<h2>Nice. <em>GSD.</em></h2>`}<p class="mute" style="margin-top:4px">${esc(a.title)}</p>
-    <label class="l" for="rf">${noteOnly ? "What did you notice or learn?" : "How did it go? (optional)"}</label><textarea class="field" id="rf" style="min-height:140px" placeholder="${noteOnly ? "A thought, a quote, a next idea" : "One line is plenty"}">${esc(text)}</textarea>
-    ${noteOnly ? "" : `<label class="row small" style="margin-top:12px"><input type="checkbox" id="again" ${s.again ? "checked" : ""}> Would do again</label>`}
-    <div class="tiny" style="margin-top:14px">Also do this with the note</div>
-    <div class="row" style="margin-top:8px"><button class="chip ${s.wis ? "on" : ""}" data-act="tog" data-id="wis">${s.wis ? "✓ " : ""}💎 Save to Wisdom</button>
-      <button class="chip ${s.act ? "on" : ""}" data-act="tog" data-id="act">${s.act ? "✓ " : ""}⚡ Make it a new action</button></div>
-    ${s.act ? `<label class="l" for="na">The new action</label><input class="field" id="na" placeholder="Start with a verb" value="${esc(s.na ?? "")}">` : ""}
-    <div class="row" style="margin-top:16px"><button class="btn" data-act="finish" data-id="${a.id}">${noteOnly ? "Save note" : "Mark as done"}</button></div>` }
+  if (s.type === "finish") { const it = item(s.id);
+    if (!it) b = `<h2>This save is gone.</h2>`;
+    else { const inNow = it.lane === "now", room = banked().length < (S.profile.pass_cap || 3), recipe = it.kind === "recipe";
+      b = `<h2>${inNow ? `Nice. <em>GSD.</em>` : esc(markOf(it))}</h2><p class="mute" style="margin-top:4px">${esc(it.title)}</p>
+      <div class="tiny" style="margin-top:18px">How was it?</div>
+      <div class="rate">${Object.entries(RATE).map(([k, [e, n]]) => `<button class="${s.rating === k ? "on" : ""}" data-act="rate" data-id="${k}" aria-pressed="${s.rating === k}"><span aria-hidden="true">${e}</span>${n}</button>`).join("")}</div>
+      <label class="l" for="rf">${recipe ? "Notes for next time (optional)" : "Anything worth remembering? (optional)"}</label>
+      <textarea class="field" id="rf" placeholder="${recipe ? "More garlic. 25 minutes, not 20." : "One line is plenty"}">${esc(s.text ?? "")}</textarea>
+      <div class="row" style="margin-top:12px"><button class="chip ${s.wis ? "on" : ""}" data-act="tog" data-id="wis">${s.wis ? "✓ " : ""}💎 Also save the note to Wisdom</button></div>
+      <button class="btn keep" style="margin-top:18px;width:100%" data-act="dofinish" data-id="${it.id}" ${S.busy ? "disabled" : ""}>${S.busy ? '<span class="spin"></span>' : "✓"} ${inNow ? "Done" : esc(markOf(it))}</button>
+      <p class="tiny" style="margin-top:10px;text-align:center">${inNow ? (room ? `Earns a ${passMin()}-minute scroll pass.` : `Your pass bank is full (${S.profile.pass_cap || 3}). Spend one to earn more.`) : "Logged on its shelf. Passes are earned by finishing things in Now."}</p>` } }
+  if (s.type === "earned") { const nw = nowItems(), bk = banked(), pool = [...nextItems(), ...candidates()].slice(0, 3 - nw.length);
+    b = `<div class="big-em" aria-hidden="true">${s.got ? "🎟️" : "✅"}</div><h2 style="text-align:center">${s.got ? `+${s.got} minutes <em>earned</em>` : "Done."}</h2>
+    <p class="mute" style="text-align:center;margin-top:6px">${[bk.length ? `${bk.length} pass${bk.length > 1 ? "es" : ""} banked · ${bk.reduce((a, x) => a + x.minutes, 0)} min` : "", !nw.length ? "Now is clear. All three done 🎉" : "", weekDone() >= goal() ? `Weekly goal hit (${weekDone()}/${goal()}).` : `${weekDone()} of ${goal()} this week.`].filter(Boolean).join(" · ")}</p>
+    ${pool.length ? `<div class="tiny" style="margin:20px 0 6px">Fill the free slot</div><div class="nlist">${pool.map(it => nrow(it, `<button class="btn sm" data-act="pickit" data-id="${it.id}">⚡ Now</button>`)).join("")}</div>` : ""}
+    <div class="row" style="margin-top:20px;justify-content:center">${s.back?.type === "gate" ? `<button class="btn" data-act="togate">Back to the gate</button>` : ""}<button class="btn${s.back?.type === "gate" ? " ghost" : ""}" data-act="close">Done</button></div>` }
+  if (s.type === "swap") { const it = item(s.id);
+    b = `<h2>Now is <em>full</em></h2><p class="mute" style="margin-top:4px">Three is the point. Swap one out to make room for “${esc(it?.title || "this")}”.</p>
+    <div class="nlist" style="margin-top:16px">${nowItems().map(o => nrow(o, `<button class="btn sm ghost" data-act="swapout" data-id="${o.id}">Swap out</button>`)).join("")}</div>
+    <p class="tiny" style="margin-top:8px">The one you swap out goes first in Up next.</p>
+    <div class="row" style="margin-top:16px"><button class="btn ghost" data-act="swapnext">Put it first in Up next instead</button></div>` }
+  if (s.type === "pick") b = `<h2>${s.lane === "next" ? "Add to <em>Up next</em>" : "Fill a <em>slot</em>"}</h2>
+    <input class="field search" id="pq" type="search" placeholder="Search your library" value="${esc(s.q || "")}" aria-label="Search your library" style="margin-top:14px"><div id="picklist">${pickList()}</div>`;
+  if (s.type === "rules") { const m = passMin(), cap = S.profile.pass_cap || 3;
+    b = `<h2>How <em>Now</em> works</h2><p class="mute" style="margin-top:4px">Fewer possibilities. More done.</p>
+    <ol class="rules">
+      <li><b>Three slots.</b> Only three things are active at a time. Everything else waits in Up next (five) or on your Library shelves.</li>
+      <li><b>Finish to earn.</b> Each thing you finish from Now earns a ${m}-minute scroll pass. You can bank ${cap}.</li>
+      <li><b>Clear all three, then hunt.</b> When Now is empty, scrolling opens in ${m}-minute hunts to find what's next. Share finds straight into Now.</li>
+      <li><b>The gate.</b> With the iPhone automation on, opening Instagram, YouTube or TikTok shows your Now first. “Open anyway” always works, and counts as a slip.</li>
+      <li><b>The gauge.</b> It fills as you finish things this week. The goal is ${goal()} a week; hit it week after week for a streak.</li></ol>
+    <div class="row" style="margin-top:18px"><button class="btn" data-act="close">Got it</button>${S.profile.commitment === "none" ? `<button class="btn ghost" data-act="capsetup">📵 Set up the gate</button>` : ""}</div>` }
+  if (s.type === "done") b = "";
   if (s.type === "dismiss") b = `<h2>Not for you?</h2><p class="small mute" style="margin-top:4px">Optional: tell GSD why, so suggestions get better.</p>
     <div class="chips" style="margin-top:14px">${[["big", "Too big"], ["no", "Not interested"], ["did", "Did it already"]].map(([k, n]) => `<button class="chip" data-act="dismissed" data-id="${s.id}|${k}">${n}</button>`).join("")}</div>`;
   if (s.type === "ask") b = `<h2>Ask your library</h2><form data-form="ask" style="margin-top:12px"><input class="field" id="aq" placeholder="What could I try this weekend?" value="${esc(S.ask?.q || "")}" aria-label="Your question">
-    <div class="scroll" style="margin-top:10px">${["Give me three things I could try this weekend", "What themes keep coming up in my saves?", "Which saved ideas could improve my daily routine?"].map(x => `<button type="button" class="chip" data-act="askq" data-id="${esc(x)}">${x}</button>`).join("")}</div>
+    <div class="scroll" style="margin-top:10px">${["What should go in my Now this weekend?", "What could we cook tonight?", "What themes keep coming up in my saves?"].map(x => `<button type="button" class="chip" data-act="askq" data-id="${esc(x)}">${x}</button>`).join("")}</div>
     <button class="btn" style="margin-top:14px" ${S.ask?.busy ? "disabled" : ""}>${S.ask?.busy ? '<span class="spin"></span> Thinking' : "Ask"}</button></form>
     ${S.ask?.answer ? `<div class="card soft" style="margin-top:16px;white-space:pre-wrap">${esc(S.ask.answer)}</div>${S.ask.sources?.length ? `<div class="stack" style="margin-top:12px;gap:8px">${S.ask.sources.map(x => `<button class="chip" style="white-space:normal;text-align:left" data-act="open" data-id="${x.item_id}">[${x.n}] ${esc(x.title)}</button>`).join("")}</div>` : ""}` : ""}
     ${S.ask?.error ? `<p class="small" style="color:var(--red);margin-top:12px">${esc(S.ask.error)}</p>` : ""}`;
-  if (s.type === "newch") b = `<h2>New challenge</h2><p class="small mute">Flexible and yours. Missing it costs nothing.</p>
-    <div class="chips" style="margin-top:12px">${[["Three creative experiments this week", 3, "week", "create"], ["One new experience every week", 1, "week", "experience"], ["Apply one idea a week", 1, "week", "grow"], ["Build one small thing this month", 1, "month", "build"], ["Learn four new things this month", 4, "month", "learn"]].map(c => `<button class="chip" style="white-space:normal;text-align:left" data-act="addch" data-id="${esc(JSON.stringify(c))}">${c[0]}</button>`).join("")}</div>`;
-  if (s.type === "ownact") b = `<h2>Your own action</h2><label class="l" for="oa">What will you do?</label><input class="field" id="oa" placeholder="Start with a verb">
+  if (s.type === "ownact") b = `<h2>Your own plan</h2><p class="small mute" style="margin-top:4px">What will count as having done it?</p><label class="l" for="oa">The plan</label><input class="field" id="oa" placeholder="Start with a verb">
     <label class="l" for="om">Kind</label><select class="field" id="om">${Object.entries(MODE).map(([k, v]) => `<option value="${k}">${v[0]} ${v[1]}</option>`).join("")}</select>
-    <button class="btn" style="margin-top:16px" data-act="addown" data-id="${s.item || ""}">Add</button>`;
-  if (s.type === "gate") { const f = focusAction(), doneToday = doneActs().some(a => iso(new Date(a.done_at)) === iso());
-    b = `<div class="tiny">A pause before ${esc(s.app || "scrolling")}</div><h2 style="margin-top:6px">${esc(S.profile.intention || "One small thing first?")}</h2>
-    ${doneToday ? `<p class="mute" style="margin-top:10px">You've done your thing today. Enjoy.</p>` : f ? `<div style="margin-top:14px">${actRow(f, " ")}</div>` : `<p class="mute" style="margin-top:10px">Nothing planned today.</p>`}
-    <div class="stack" style="margin-top:16px;gap:10px">${!doneToday && f ? `<button class="btn" data-act="gate" data-id="do_now">Do it now (${f.minutes} min)</button><button class="btn keep" data-act="gate" data-id="did_it">Did it already</button>` : ""}
-    <button class="btn ghost" data-act="gate" data-id="skipped">${doneToday ? "Continue" : "Not now, continue"}</button></div>` }
-  if (s.type === "capsetup") { const fnUrl = CFG.url + "/functions/v1/gsd/capture";
-    b = `<h2>Save from the iPhone share sheet</h2><p class="small mute" style="margin-top:4px">A one-time Apple Shortcut lets you share a reel or video straight to GSD without opening it.</p>
-    ${S.newToken ? `<div class="card soft" style="margin-top:14px"><div class="tiny">Your capture token (shown once)</div><code style="word-break:break-all;display:block;margin:6px 0">${esc(S.newToken)}</code><button class="btn sm" data-act="copy" data-id="${esc(S.newToken)}">Copy token</button></div>`
+    <button class="btn" style="margin-top:16px" data-act="addown" data-id="${s.item || ""}">Make it the plan</button>`;
+  if (s.type === "gate") { const nw = nowItems(), bk = banked(), ap = activePass(), app = APPS[s.app] || cap1(s.app || "") || "scrolling", m = passMin();
+    b = `<div class="tiny">A pause before ${esc(app)}</div><h2 class="gate-h">${esc(S.profile.intention || (nw.length ? "Earn it first." : "Now is clear."))}</h2>
+    ${ap ? `<div class="gate-box"><p><b>⏱ ${minsLeft(ap)} minutes left on your pass.</b></p><button class="btn" data-act="gogo" data-id="${esc(s.app || "")}">Continue to ${esc(app)}</button></div>`
+    : `${nw.length ? `<div class="tiny" style="margin:16px 0 6px">Your Now</div><div class="nlist">${nw.map(gateRow).join("")}</div>` : ""}
+      <div class="gate-box">${nw.length && bk.length ? `<p><b>🎟️ You've earned ${bk.length} pass${bk.length > 1 ? "es" : ""}.</b> Spend one on ${bk[0].minutes} minutes of ${esc(app)}?</p><button class="btn" data-act="usepass" data-id="pass">Start a ${bk[0].minutes}-minute pass</button>`
+        : nw.length ? `<p><b>Finish one of these to earn ${m} minutes.</b> Tap ✓ when it's done, then come back here.</p>`
+        : `<p><b>You cleared all three.</b> Scroll with a purpose: find up to three things worth doing and share them to GSD → Now.</p><button class="btn" data-act="usepass" data-id="hunt">Start hunting · ${m} min</button>`}</div>
+      <div class="stack" style="margin-top:14px;gap:10px;align-items:center"><button class="btn ghost" style="width:100%" data-act="close">Not now, stay here</button>
+        <button class="small mute" style="text-decoration:underline;padding:6px" data-act="usepass" data-id="slip">Open ${esc(app)} anyway (counts as a slip)</button></div>`}` }
+  if (s.type === "capsetup") { const fn = CFG.url + "/functions/v1/gsd", site = location.origin + location.pathname, copy = v => ` <button class="chip" data-act="copy" data-id="${esc(v)}">Copy</button>`;
+    b = `<h2>Set up your iPhone</h2><p class="small mute" style="margin-top:4px">Two one-time Shortcuts: one saves from any app's share sheet, one puts your Now in front of Instagram, YouTube and TikTok.</p>
+    ${S.newToken ? `<div class="card soft" style="margin-top:14px"><div class="tiny">Your capture token (shown once). Both shortcuts use it.</div><code style="word-break:break-all;display:block;margin:6px 0">${esc(S.newToken)}</code><button class="btn sm" data-act="copy" data-id="${esc(S.newToken)}">Copy token</button></div>`
       : `<button class="btn" style="margin-top:14px" data-act="newtoken">Create a capture token</button>`}
-    <ol class="small" style="padding-left:20px;margin:16px 0 0;line-height:1.7">
-      <li>Open the <b>Shortcuts</b> app → + → name it <b>Save to GSD</b>.</li>
-      <li>Tap ⓘ → turn on <b>Show in Share Sheet</b>. Accept URLs and Text.</li>
-      <li>Add action <b>Get Contents of URL</b>. URL:<br><code style="word-break:break-all">${esc(fnUrl)}</code> <button class="chip" data-act="copy" data-id="${esc(fnUrl)}">Copy</button></li>
-      <li>Method <b>POST</b>. Header <code>Authorization</code> = <code>Bearer </code> + your token.</li>
-      <li>Request Body <b>JSON</b>: <code>text</code> = Shortcut Input, <code>via</code> = <code>shortcut</code>.</li>
-      <li>Add <b>Show Notification</b>: “Saved to GSD”.</li></ol>
+    <h3 class="sec">1 · Save from the share sheet</h3>
+    <ol class="small steps">
+      <li>Open <b>Shortcuts</b> → + → name it <b>Save to GSD</b>. Tap ⓘ → turn on <b>Show in Share Sheet</b> (URLs and Text).</li>
+      <li>Add <b>List</b> with three items: <code>Now</code>, <code>Up next</code>, <code>Library</code>. Then add <b>Choose from List</b>.</li>
+      <li>Add <b>Get Contents of URL</b>:<br><code style="word-break:break-all">${esc(fn)}/capture</code>${copy(fn + "/capture")}<br>Method <b>POST</b>. Header <code>Authorization</code> = <code>Bearer </code> + your token.</li>
+      <li>Request Body <b>JSON</b>: <code>text</code> = Shortcut Input, <code>lane</code> = Chosen Item, <code>via</code> = <code>shortcut</code>.</li>
+      <li>Add <b>Get Dictionary Value</b> for <code>message</code>, then <b>Show Notification</b> with it. It tells you where the save went: “Saved to Now (slot 2 of 3).”</li></ol>
+    <p class="tiny" style="margin-top:8px">Don't want the menu? Skip step 2 and leave out <code>lane</code>. Saves then go to the Library, and writing <code>#now</code> or <code>#next</code> in the shared text still works.</p>
+    <h3 class="sec">2 · The scroll gate</h3>
+    <ol class="small steps">
+      <li>Sign in to GSD once in <b>Safari</b> at <code style="word-break:break-all">${esc(site)}</code> (the gate opens there).</li>
+      <li>Shortcuts → <b>Automation</b> → + → <b>App</b> → choose <b>Instagram</b> → <b>Is Opened</b> → <b>Run Immediately</b>.</li>
+      <li>Add <b>Get Contents of URL</b>:<br><code style="word-break:break-all">${esc(fn)}/gate-check?app=instagram</code>${copy(fn + "/gate-check?app=instagram")}<br>Method <b>GET</b>, the same <code>Authorization</code> header.</li>
+      <li>Add <b>Get Dictionary Value</b> for <code>open</code>. Add <b>If</b> Dictionary Value <b>is</b> <code>yes</code> → <b>Open URLs</b>:<br><code style="word-break:break-all">${esc(site)}?gate=instagram</code>${copy(site + "?gate=instagram")}</li>
+      <li>Make the same automation for <b>YouTube</b> (<code>youtube</code> in both addresses) and <b>TikTok</b> (<code>tiktok</code>).</li>
+      <li>Turn on <b>Scroll gate</b> under You → The rules.</li></ol>
+    <p class="tiny" style="margin-top:8px">While a pass is running the check says <code>no</code> and the app opens as normal. YouTube can't tell Shorts from the rest, so the gate covers the whole app.</p>
+    <h3 class="sec">3 · Optional: ring when a pass ends</h3>
+    <ol class="small steps">
+      <li>New shortcut named exactly <b>GSD Pass</b>. Add <b>Split Text</b>: Shortcut Input, separated by Spaces.</li>
+      <li><b>Get Item from List</b> → First Item → <b>Start Timer</b> for that many minutes.</li>
+      <li><b>Get Item from List</b> (from Split Text) → Last Item → <b>Open URLs</b>.</li>
+      <li>Turn on <b>Ring when a pass ends</b> under You → The rules.</li></ol>
     ${S.tokens.length ? `<div class="sec"><h3>Tokens</h3><div class="stack" style="margin-top:8px;gap:8px">${S.tokens.map(t => `<div class="row small" style="justify-content:space-between"><span>${esc(t.name)} · created ${ago(t.created_at)}${t.last_used_at ? " · used " + ago(t.last_used_at) : ""}</span><button class="chip" data-act="revoke" data-id="${t.id}">Revoke</button></div>`).join("")}</div></div>` : ""}` }
-  return `<div class="overlay" data-act="backdrop" data-type="${s.type}"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div><button class="x" data-act="close" aria-label="Close">✕</button>${b}</div></div>`;
+  return `<div class="overlay" data-act="backdrop" data-type="${s.type}"><div class="sheet${s.type === "gate" ? " gate" : ""}" role="dialog" aria-modal="true"><div class="grab"></div><button class="x" data-act="close" aria-label="Close">✕</button>${b}</div></div>`;
 }
 /* ---------- item view: ambient colour, floating media card, liquid-glass sheet ---------- */
 const IC = {
@@ -595,7 +748,6 @@ function ivMenu(it) {
   return `<div class="iv-catch" data-act="menuclose"></div><div class="iv-menu lg" role="menu">
     ${u ? `<a role="menuitem" href="${esc(u)}" target="_blank" rel="noopener noreferrer" data-act="menuclose"><span aria-hidden="true">↗</span>Open original</a>
       <button role="menuitem" data-act="copy" data-id="${esc(u)}"><span aria-hidden="true">🔗</span>Copy link</button>` : ""}
-    ${it.status !== "kept" ? `<button role="menuitem" data-act="keep" data-id="${it.id}"><span aria-hidden="true">💚</span>Keep</button>` : ""}
     ${S.cards.some(c => c.item_id === it.id) ? `<button role="menuitem" data-act="remember" data-id="${it.id}"><span aria-hidden="true">🧠</span>${it.remember ? "Stop remembering" : "Help me remember"}</button>` : ""}
     ${it.area === "Wisdom" && it.source === "note" ? "" : `<button role="menuitem" data-act="reprocess" data-id="${it.id}"><span aria-hidden="true">🔄</span>Re-read</button>`}
     ${it.status !== "let_go" ? `<button role="menuitem" data-act="letgo" data-id="${it.id}"><span aria-hidden="true">🍃</span>Let go</button>` : ""}</div>`;
@@ -629,37 +781,48 @@ function ivEntities(it) {
   if (e.recipe?.ingredients?.length) out.push(card(`🍽️ Ingredients`, `<ul class="tk small">${e.recipe.ingredients.map(x => `<li>${esc(x)}</li>`).join("")}</ul>${e.recipe.steps?.length ? `<h4 style="margin-top:14px">Steps</h4><ol class="small" style="padding-left:20px;margin:6px 0 0">${e.recipe.steps.map(x => `<li style="margin:4px 0">${esc(x)}</li>`).join("")}</ol>` : ""}
     <div class="row"><button class="btn sm ghost" data-act="copy" data-id="${esc(e.recipe.ingredients.join("\n"))}">Copy the list</button></div>`));
   if (e.book?.title) out.push(card(`📖 ${esc(e.book.title)}`, e.book.author ? `<p>${esc(e.book.author)}</p>` : ""));
+  if (e.film?.title) { const cc = JW[String(S.profile.country || "").toLowerCase().trim()] || "us";
+    out.push(card(`${e.film.type === "show" ? "📺" : "🎬"} ${esc(e.film.title)}${e.film.year ? ` (${e.film.year})` : ""}`, `<p>${esc([e.film.creator, e.film.genre, e.film.runtime_minutes ? e.film.runtime_minutes + " min" : ""].filter(Boolean).join(" · "))}</p>${e.film.where_to_watch ? `<p style="color:inherit">On ${esc(e.film.where_to_watch)}</p>` : ""}
+      <div class="row"><a class="btn sm" target="_blank" rel="noopener noreferrer" href="https://www.justwatch.com/${cc}/search?q=${encodeURIComponent(e.film.title)}">Where to watch ↗</a></div>`)) }
   if (e.tool?.name) out.push(card(`🛠️ ${esc(e.tool.name)}`, `${e.tool.what_for ? `<p>${esc(e.tool.what_for)}</p>` : ""}${safeUrl(e.tool.url) ? `<a class="iv-go" target="_blank" rel="noopener noreferrer" href="${esc(safeUrl(e.tool.url))}">Open it ↗</a>` : ""}`));
   if (e.workout?.exercises?.length) out.push(card(`🏃 Workout`, `<ul class="tk small">${e.workout.exercises.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`));
   if (e.event?.name) out.push(card(`🎟️ ${esc(e.event.name)}`, `<p>${esc([e.event.date, e.event.place].filter(Boolean).join(" · "))}</p>`));
   return out.length ? `<section class="iv-sec"><div class="iv-cols">${out.join("")}</div></section>` : "";
 }
+function ivLane(it) {
+  const cur = it.lane || "", gone = it.status === "let_go";
+  return `<div class="iv-lane" role="group" aria-label="Where this save lives">${[["now", "⚡ Now"], ["next", "⏭ Up next"], ["", "📚 Library"]].map(([k, n]) => `<button class="iv-seg${!gone && cur === k ? " on" : ""}" data-act="ivlane" data-id="${it.id}|${k}" aria-pressed="${!gone && cur === k}">${n}</button>`).join("")}</div>
+    ${it.lane === "now" ? `<button class="iv-finish lgb" data-act="finish" data-id="${it.id}">✓ Done · earns ${passMin()} min</button>` : !pending(it) ? `<button class="iv-addnote lgb" style="margin-top:10px" data-act="finish" data-id="${it.id}">✓ ${esc(markOf(it))}${it.done_at ? " again" : ""}</button>` : ""}
+    ${it.done_at ? `<div class="iv-done"><b>${it.rating ? RATE[it.rating][0] + " " + RATE[it.rating][1] : "✓ " + esc(doneVerb(it))}</b><span>${esc(doneVerb(it))} ${ago(it.done_at)}${it.done_count > 1 ? ` · ${it.done_count} times` : ""}</span>${it.done_note ? `<p>${esc(it.done_note)}</p>` : ""}</div>` : ""}`;
+}
 function ivBody(it) {
   const u = safeUrl(it.url), [sname] = SRC[it.source] || SRC.web;
   if (pending(it)) return `${ivHead(it)}<h2 class="iv-title"><span class="spin"></span> Reading it…</h2>
-    <p class="iv-sum">Usually under a minute. GSD listens to it, watches short clips and then looks up what was mentioned. You can close this.</p>`;
-  const acts = S.actions.filter(a => a.item_id === it.id && a.status !== "dismissed").sort((x, y) => (x.resource_idx ?? 99) - (y.resource_idx ?? 99)), rel = S.related[it.id];
-  const ts = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-  const meta = [sname || hostOf(u), "saved " + ago(it.created_at), it.resaved_count ? `saved ${it.resaved_count + 1} times` : "", it.status === "kept" ? "💚 Kept" : it.status === "let_go" ? "🍃 Let go" : "Unsorted"].filter(Boolean).join(" · ");
+    <p class="iv-sum">Usually under a minute. GSD listens to it, watches short clips and then looks up what was mentioned. You can close this.</p>${ivLane(it)}`;
+  const pid = planOf(it)?.id, acts = itemActs(it.id).sort((x, y) => (y.id === pid) - (x.id === pid) || (x.resource_idx ?? 99) - (y.resource_idx ?? 99)), rel = S.related[it.id];
+  const ts = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`, d = daysIn(it), sh = shelfOf(it);
+  const meta = [sname || hostOf(u), "saved " + ago(it.created_at), it.resaved_count ? `saved ${it.resaved_count + 1} times` : "",
+    it.lane === "now" ? `⚡ In Now · ${d ? `${d} day${d > 1 ? "s" : ""}` : "since today"}` : it.lane === "next" ? "⏭ Up next" : it.status === "let_go" ? "🍃 Let go" : it.status === "inbox" ? "Unsorted" : `${sh.em} ${sh.name}`].filter(Boolean).join(" · ");
   const noteOpen = S.sheet.noteOpen || it.note;
   return `${ivHead(it)}
     ${(it.tags || []).length ? `<div class="iv-tags">${it.tags.map(x => `<button class="iv-tag lgb" data-act="ivtag" data-id="${esc(x)}">${esc(tagLabel(x))}</button>`).join("")}</div>` : ""}
     <h2 class="iv-title">${esc(it.title || "Untitled")}</h2>
     <p class="iv-meta">${esc(meta)}</p>
+    ${ivLane(it)}
     ${it.stage === "failed" ? `<div class="banner" style="background:var(--red-bg);color:var(--red)">${esc(ERR[it.error_code] || "Something went wrong reading this.")}${it.diag ? `<br><span class="tiny" style="color:inherit;opacity:.8">Details: ${esc(it.diag)}</span>` : ""}
       <div class="row" style="margin-top:10px"><button class="btn sm" data-act="reprocess" data-id="${it.id}">Re-read</button></div></div>` : ""}
     ${it.summary ? `<p class="iv-sum">${esc(it.summary)}</p>` : ""}
     <hr class="iv-hr">
     ${noteOpen ? `<div class="iv-note"><label class="iv-lbl" for="note">${IC.doc.replace("<svg", '<svg width="18" height="18"')} Your note</label><textarea class="field" id="note" data-note="${it.id}" placeholder="Why it matters to you" rows="3">${esc(it.note || "")}</textarea></div>`
       : `<button class="iv-addnote lgb" data-act="ivnote">${IC.doc} Add a note</button>`}
+    <section class="iv-sec"><h3 class="iv-h">How to do it <button data-act="ownact" data-id="${it.id}">+ Your own</button></h3>
+      ${acts.length ? `<div class="iv-cols">${acts.map(a => actRow(a, it)).join("")}</div>` : `<p class="small mute">No plan yet. Add your own, or just do it and tap ✓.</p>`}
+      ${it.stage === "ready" ? `<form data-form="steer" data-id="${it.id}" class="row" style="margin-top:4px"><input class="field" id="steer" style="flex:1;min-width:160px" placeholder="Different ideas… (optional: “outdoors”, “shorter”)" aria-label="Steer new ideas"><button class="btn sm ghost" ${S.busy ? "disabled" : ""}>${S.busy ? '<span class="spin"></span>' : "Different ideas"}</button></form>` : ""}</section>
     ${it.takeaways?.length ? `<section class="iv-sec"><h3 class="iv-h">Key points</h3><ol class="iv-pts">${it.takeaways.map(k => `<li>${esc(k.text)}${k.t != null && it.source === "youtube" && u ? ` <a class="chip" style="padding:2px 8px" target="_blank" rel="noopener noreferrer" href="${esc(u + (u.includes("?") ? "&" : "?") + "t=" + k.t + "s")}">${ts(k.t)}</a>` : ""}</li>`).join("")}</ol></section>` : ""}
     ${(it.quotes || []).length ? `<section class="iv-sec"><div class="iv-cols">${it.quotes.map(q => `<blockquote class="iv-quote">${esc(q)}</blockquote>`).join("")}</div></section>` : ""}
     ${ivEntities(it)}
     ${(it.resources || []).length ? `<section class="iv-sec"><h3 class="iv-h">Mentioned <small>${it.enrich_state === "pending" ? '<span class="spin"></span> Finding the links…' : it.resources.length}</small></h3>
       <div class="iv-cols">${it.resources.map(r => resCard(r, it)).join("")}</div></section>` : ""}
-    <section class="iv-sec"><h3 class="iv-h">Do something with it <button data-act="ownact" data-id="${it.id}">+ Your own</button></h3>
-      ${acts.length ? `<div class="iv-cols">${acts.map(a => actRow(a, "", true)).join("")}</div>` : `<p class="small mute">No actions yet.</p>`}
-      ${it.stage === "ready" ? `<form data-form="steer" data-id="${it.id}" class="row" style="margin-top:4px"><input class="field" id="steer" style="flex:1;min-width:160px" placeholder="Different ideas… (optional: “outdoors”, “shorter”)" aria-label="Steer new ideas"><button class="btn sm ghost" ${S.busy ? "disabled" : ""}>${S.busy ? '<span class="spin"></span>' : "Different ideas"}</button></form>` : ""}</section>
     ${rel?.length ? `<section class="iv-sec"><h3 class="iv-h">Related saves</h3><div class="iv-rel">${rel.map(tile).join("")}</div></section>` : ""}
     <p class="iv-foot">${[it.opened_count ? `Opened ${it.opened_count} time${it.opened_count === 1 ? "" : "s"}` : "", it.quality === "caption_only" ? "Read from the caption only" : it.quality === "title_only" ? "Only the title was readable" : ""].filter(Boolean).join(" · ")}</p>`;
 }
@@ -698,7 +861,7 @@ addEventListener("popstate", () => { if (!histOn) return; histOn = false; if (S.
 if (navigator.userAgentData && !matchMedia("(prefers-reduced-motion: reduce)").matches) document.documentElement.classList.add("lg-warp"); // the SVG warp only renders right in Chromium
 
 /* ---------- render ---------- */
-const TABS = [["home", "🏠", "Home"], ["library", "🗂️", "Library"], ["explore", "✨", "Explore"], ["actions", "⚡", "Actions"], ["profile", "🙂", "You"]];
+const TABS = [["now", "⚡", "Now"], ["library", "🗂️", "Library"], ["explore", "✨", "Explore"], ["profile", "🙂", "You"]];
 const tabBtn = ([k, e, n]) => `<button class="tab ${S.tab === k ? "on" : ""}" data-act="tab" data-id="${k}"><span aria-hidden="true">${e}</span>${n}</button>`;
 function render() {
   const app = $("#app");
@@ -711,7 +874,7 @@ function render() {
     <button class="btn" style="margin-top:16px;width:100%" ${S.busy ? "disabled" : ""}>${up ? "Create account" : "Sign in"}</button>
     <p class="small mute" style="margin-top:14px">${up ? "Already have an account?" : "First time here?"} <button type="button" data-act="authmode" style="text-decoration:underline">${up ? "Sign in" : "Create account"}</button></p></form></div>`; return }
   if (S.screen === "error") { app.innerHTML = `<div class="center"><div class="auth"><h2>Couldn't load your library</h2><p class="mute" style="margin-top:8px">${esc(S.error)}</p><div class="row" style="margin-top:16px;justify-content:center"><button class="btn" data-act="reload">Try again</button><button class="btn ghost" data-act="signout">Sign out</button></div></div></div>`; return }
-  const view = { home: vHome, library: vLibrary, explore: vExplore, actions: vActions, profile: vProfile }[S.tab]();
+  const view = { now: vNow, library: vLibrary, explore: vExplore, profile: vProfile }[S.tab]();
   app.innerHTML = `<div class="shell"><aside class="side"><div class="logo"><i></i>GSD</div>
     ${TABS.map(([k, e, n]) => `<button class="nav ${S.tab === k ? "on" : ""}" data-act="tab" data-id="${k}"><span aria-hidden="true">${e}</span>${n}</button>`).join("")}
     <button class="btn" data-act="save">+ Save something</button></aside>
@@ -750,8 +913,8 @@ async function saveThing(body) {
   S.busy = false;
   if (!r || r.error) { toast(r?.error === "daily_limit" ? "That's 100 saves today. More tomorrow." : "Couldn't save: " + (r?.message || r?.error || "no connection")); renderSheet(); return }
   await api.refreshItem(r.item_id);
-  S.sheet = null; S.tab = "home"; refresh();
-  toast(r.duplicate ? "You saved this before. Moved it to the top." : "Saved. Reading it now…");
+  S.sheet = null; S.tab = "now"; refresh();
+  toast(`${r.message || "Saved."}${r.duplicate ? "" : " Reading it now…"}`);
   poll();
 }
 let pollT = null;
@@ -778,7 +941,8 @@ function fileToJpeg(file) {
 /* ---------- actions ---------- */
 const H = {
   tab(id) { S.tab = id; S.sheet = null; S.folder = ""; refresh(); scrollTo(0, 0) },
-  save() { openSheet({ type: "save" }); setTimeout(() => $("#sv")?.focus(), 50) },
+  save(id) { openSheet({ type: "save", lane: ["now", "next"].includes(id) ? id : "library" }); setTimeout(() => $("#sv")?.focus(), 50) },
+  savelane(k) { const s = S.sheet; s.val = $("#sv").value; s.note = $("#sn").value; s.lane = k; renderSheet() },
   close() {
     const iv = $(".iv");
     if (iv && !iv.classList.contains("out") && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -788,11 +952,11 @@ const H = {
   ivmenu() { S.sheet.menu = !S.sheet.menu; renderSheet(); if (S.sheet.menu) $(".iv-menu [role=menuitem]")?.focus({ preventScroll: true }) },
   menuclose() {},
   ivnote() { S.sheet.noteOpen = true; renderSheet(); $("#note")?.focus() },
-  ivarea(id) { S.area = id; S.lib = "all"; S.q = ""; H.tab("library") },
-  ivtag(id) { S.q = id; S.area = ""; S.lib = "all"; H.tab("library") },
+  ivarea(id) { S.area = id; S.shelf = ""; S.lib = "areas"; S.q = ""; H.tab("library") },
+  ivtag(id) { S.q = id; S.area = ""; S.shelf = ""; S.lib = "all"; H.tab("library") },
   reload() { location.reload() },
   undo() { const u = toast.undo; $("#toast").innerHTML = ""; toast.undo = null; if (u) u() },
-  dosave() { const v = $("#sv").value.trim(); if (v) saveThing({ text: v, note: $("#sn").value.trim() }) },
+  dosave() { const v = $("#sv").value.trim(); if (v) saveThing({ text: v, note: $("#sn").value.trim(), lane: S.sheet.lane || "library" }) },
   async open(id) {
     const it = item(id); if (!it) return;
     openSheet({ type: "item", id });
@@ -801,46 +965,103 @@ const H = {
       if (!S.related[id]) { const { data } = await sb.rpc("related_items", { p_item: id, p_count: 5 }); S.related[id] = (data || []).filter(r => r.similarity >= .5).map(r => item(r.item_id)).filter(Boolean).slice(0, 3); if (S.sheet?.id === id && S.related[id].length) renderSheet() }
     }
   },
-  async start(id) {
-    if (S.actions.filter(a => a.status === "doing").length >= 7) return toast("Seven things in progress is plenty. Finish or park one first.");
-    await api.upd("actions", id, { status: "doing", started_at: now() });
-    if (focusAction()?.id === id || !S.focus?.action_id) await api.setFocus({ action_id: id, state: "accepted" });
-    toast("On your list. Start small."); refresh();
+  /* ---- Now, Up next and the library ---- */
+  async toNow(id, plan) {
+    plan = plan || (item(id) && !item(id).plan_action_id ? planOf(item(id))?.id : null); // the default plan becomes the recorded one
+    const back = S.sheet, r = await api.lane(id, "now", plan ? { plan_action_id: plan } : {});
+    if (r === "now_full") { openSheet({ type: "swap", id, plan, back }); return false }
+    if (r !== "ok") return false;
+    refresh(); toast(`⚡ In Now · slot ${item(id)?.slot}`); return true;
   },
-  async later(id) { await api.upd("actions", id, { status: "suggested" }); refresh() },
-  dismiss(id) { openSheet({ type: "dismiss", id, back: S.sheet }); },
-  async dismissed(v) { const [id, why] = v.split("|"); const back = S.sheet?.back;
-    if (why === "did") await api.upd("actions", id, { status: "done", done_at: now() }); else await api.upd("actions", id, { status: "dismissed", reflection: why === "big" ? "dismissed: too big" : "dismissed: not interested" });
-    S.sheet = back?.type === "item" ? back : null; refresh() },
-  done(id) { openSheet({ type: "done", id, back: S.sheet }) },
-  note(id) { openSheet({ type: "done", id, mode: "note", back: S.sheet }) },
-  tog(k) { const sh = S.sheet; sh.text = $("#rf").value; sh.again = $("#again")?.checked; sh.na = $("#na")?.value ?? sh.na; sh[k] = !sh[k];
-    if (k === "act" && sh.act && !sh.na) sh.na = (sh.text.split(/(?<=[.!?])\s|\n/)[0] || "").trim().slice(0, 160);
-    renderSheet(); if (k === "act" && sh.act) $("#na")?.focus() },
-  async finish(id) {
-    const a = S.actions.find(x => x.id === id), sh = S.sheet, back = sh?.back, text = $("#rf").value.trim(), na = ($("#na")?.value || "").trim();
-    if (sh.mode === "note") await api.upd("actions", id, { reflection: text });
-    else {
-      await api.upd("actions", id, { status: "done", done_at: now(), reflection: text, again: $("#again")?.checked || null });
-      if (a?.item_id && item(a.item_id)?.status === "inbox") await api.upd("items", a.item_id, { status: "kept" });
-      if (S.focus?.action_id === id) await api.setFocus({ state: "done" });
-    }
+  async toNext(id, front) {
+    const first = nextItems().find(i => i.id !== id), r = await api.lane(id, "next", front && first ? { next_pos: first.next_pos - 1 } : {});
+    if (r === "next_full") { toast("Up next holds five. Pull one into Now or send one back first."); return false }
+    if (r !== "ok") return false;
+    refresh(); return true;
+  },
+  async tolib(id) { if (await api.lane(id, null, { status: "kept" }) === "ok") { refresh(); toast("Back on its shelf") } },
+  pull(id) { return H.toNow(id) },
+  async tonext(id) { if (await H.toNext(id)) toast("⏭ In Up next") },
+  async park(id) {
+    const first = nextItems()[0];
+    let r = await api.lane(id, "next", first ? { next_pos: first.next_pos - 1 } : {}), where = "first in Up next";
+    if (r === "next_full") { r = await api.lane(id, null, { status: "kept" }); where = "back on its shelf" }
+    if (r !== "ok") return;
+    refresh(); toast(`Parked: ${where}`, async () => { if (await api.lane(id, "now") === "ok") refresh(); else toast("Its slot is taken now") });
+  },
+  async nextup(id) { const l = nextItems(), k = l.findIndex(i => i.id === id); if (k < 1) return;
+    await api.upd("items", id, { next_pos: k === 1 ? l[0].next_pos - 1 : (l[k - 2].next_pos + l[k - 1].next_pos) / 2 }); render() },
+  async ivlane(v) { const [id, k] = v.split("|"), it = item(id); if (!it || (it.lane || "") === k && it.status !== "let_go") return;
+    if (k === "now") return H.toNow(id);
+    if (k === "next") { if (await H.toNext(id)) toast("⏭ In Up next"); return }
+    if (it.status === "let_go") { await api.lane(id, null, { status: "kept", let_go_at: null }); refresh(); return toast("Back on its shelf") }
+    H.tolib(id) },
+  async plan(aid) { const a = S.actions.find(x => x.id === aid), it = a && item(a.item_id); if (!it) return;
+    if (it.lane === "now") { if (await api.lane(it.id, "now", { plan_action_id: aid }) === "ok") { refresh(); toast("📌 That's the plan") } }
+    else H.toNow(it.id, aid) },
+  pick(id) { openSheet({ type: "pick", lane: id === "next" ? "next" : "now", q: "" }); setTimeout(() => $("#pq")?.focus(), 50) },
+  async pickit(id) {
+    if (S.sheet?.lane === "next") { if (await H.toNext(id)) { S.sheet = null; refresh(); toast("⏭ In Up next") } return }
+    if (await H.toNow(id)) { S.sheet = null; refresh() } },
+  async swapout(oldId) {
+    const s = S.sheet, first = nextItems()[0];
+    let r = await api.lane(oldId, "next", first ? { next_pos: first.next_pos - 1 } : {});
+    if (r === "next_full") r = await api.lane(oldId, null, { status: "kept" });
+    if (r !== "ok") return;
+    const r2 = await api.lane(s.id, "now", s.plan ? { plan_action_id: s.plan } : {});
+    S.sheet = ["item", "triage"].includes(s.back?.type) ? s.back : null; refresh();
+    if (r2 === "ok") toast(`⚡ Swapped in · slot ${item(s.id)?.slot}`) },
+  async swapnext() { const s = S.sheet; if (await H.toNext(s.id, true)) { S.sheet = ["item", "triage"].includes(s.back?.type) ? s.back : null; refresh(); toast("⏭ First in Up next") } },
+  async tlane(v) { const [id, k] = v.split("|");
+    if (k === "now") { if (await H.toNow(id)) { S.sheet = { type: "triage" }; refresh() } }
+    else if (k === "next") { if (await H.toNext(id)) { S.sheet = { type: "triage" }; refresh() } }
+    else if (k === "lib") H.keep(id); else H.letgo(id) },
+  /* ---- finishing ---- */
+  finish(id) { openSheet({ type: "finish", id, back: S.sheet, rating: null }) },
+  rate(k) { const s = S.sheet; s.text = $("#rf").value; s.rating = s.rating === k ? null : k; renderSheet() },
+  tog(k) { const s = S.sheet; s.text = $("#rf")?.value ?? s.text; s[k] = !s[k]; renderSheet() },
+  async dofinish(id) {
+    const it = item(id), s = S.sheet, text = $("#rf").value.trim(), inNow = it.lane === "now", before = banked().length, pl = planOf(it);
+    S.busy = true; s.text = text; renderSheet();
+    const r = await api.lane(id, null, { done_at: now(), done_count: (it.done_count || 0) + 1, rating: s.rating || null, done_note: text || it.done_note || "", status: "kept" });
+    S.busy = false;
+    if (r !== "ok") return renderSheet();
+    if (pl && S.actions.find(x => x.id === pl.id)?.status !== "done") await api.upd("actions", pl.id, { status: "done", done_at: now() }).catch(() => {});
     let extra = "";
-    if (sh.wis && text) {
+    if (s.wis && text) {
       const { data, error } = await sb.from("items").insert({ source: "note", kind: "quote", via: "app", title: text.split("\n")[0].slice(0, 80), summary: text, insight: text.slice(0, 240), content_text: text,
-        area: "Wisdom", area_locked: true, status: "kept", stage: "ready", quality: "full", note: "From: " + a.title }).select(ITEM_COLS).single();
+        area: "Wisdom", area_locked: true, status: "kept", stage: "ready", quality: "full", note: "From: " + it.title }).select(ITEM_COLS).single();
       if (error) toast("Couldn't save to Wisdom"); else { S.items.unshift(data); extra = " · saved to Wisdom" }
     }
-    if (sh.act && na) { await api.ins("actions", { item_id: a.item_id || null, title: na.slice(0, 160), why: "From your note on: " + a.title, mode: a.mode, origin: "user", status: "suggested", minutes: S.profile.daily_minutes || 15 }); extra += " · new action added" }
-    S.sheet = back?.type === "item" ? back : null; refresh(); toast((sh.mode === "note" ? "Note saved" : "✅ GSD") + extra);
+    await api.loadFocus();
+    if (inNow) { const got = banked().length > before ? banked()[0].minutes : 0; render(); openSheet({ type: "earned", got, back: s.back }) }
+    else { S.sheet = s.back?.type === "item" ? s.back : null; refresh(); toast(`✓ ${doneVerb(it)}${extra}`) }
   },
-  async swap() { const f = focusAction(); if (f) S.swapped.push(f.id); const n = rank(S.swapped)[0];
-    if (n) { await api.setFocus({ action_id: n.id, state: "offered", swaps: (S.focus?.swaps || 0) + 1 }); render() } else toast("That's the only idea right now") },
-  async nottoday() { await api.setFocus({ state: "skipped" }); render() },
+  togate() { openSheet(S.sheet.back) },
+  /* ---- passes and the gate ---- */
+  async usepass(mode) {
+    const app = S.sheet?.app || "", { data, error } = await sb.rpc("use_pass", { p_mode: mode, p_app: app });
+    if (error) return toast(/no_pass/.test(error.message) ? "No pass banked. Finish something in Now first." : /now_not_empty/.test(error.message) ? "Hunting is for when Now is clear." : "Couldn't start it");
+    await api.loadFocus(); S.sheet = null; refresh();
+    toast(mode === "slip" ? "Logged as a slip. Go easy on yourself." : mode === "hunt" ? `🔎 ${data.minutes} minutes. Find what's next.` : `⏱ ${data.minutes} minutes. Enjoy them.`);
+    H.gogo(app, data.minutes);
+  },
+  gogo(app, mins) {
+    app = typeof app === "string" ? app : S.sheet?.app || "";
+    const links = { instagram: "instagram://", youtube: "youtube://", x: "twitter://", twitter: "twitter://", reddit: "reddit://", tiktok: "https://www.tiktok.com/", facebook: "fb://" }, url = links[app];
+    if (S.sheet?.type === "gate") { S.sheet = null; refresh() }
+    if (!url) return;
+    const ap = activePass(), left = typeof mins === "number" ? mins : ap ? minsLeft(ap) : 0;
+    location.href = passTimer() && left ? `shortcuts://run-shortcut?name=${encodeURIComponent("GSD Pass")}&input=text&text=${encodeURIComponent(left + " " + url)}` : url;
+  },
+  async endpass() { await sb.rpc("end_pass"); await api.loadFocus(); render(); toast("Pass ended. Back to it.") },
+  passtimer() { const on = !passTimer(); try { localStorage.setItem("gsd_passtimer", on ? "1" : "0") } catch {} render(); if (on) toast("Make the GSD Pass shortcut once: You → Set up the iPhone") },
+  rules() { openSheet({ type: "rules" }) },
+  /* ---- library ---- */
   triage() { openSheet({ type: "triage" }) },
   async keep(id) { await api.upd("items", id, { status: "kept", let_go_at: null }); refresh() },
-  async letgo(id) { const prev = item(id).status; await api.upd("items", id, { status: "let_go", let_go_at: now() }); if (S.sheet?.type === "item") S.sheet = null; refresh();
-    toast("Let go", async () => { await api.upd("items", id, { status: prev, let_go_at: null }); refresh() }) },
+  async letgo(id) { const prev = item(id).status, lane = item(id).lane; await api.lane(id, null, { status: "let_go", let_go_at: now() }); if (S.sheet?.type === "item") S.sheet = null; refresh();
+    toast("Let go", async () => { await api.lane(id, null, { status: prev, let_go_at: null }); if (lane) await api.lane(id, lane); refresh() }) },
   review() { openSheet({ type: "review" }) },
   reveal() { S.sheet.show = true; renderSheet() },
   async rc(v) { const [id, r] = v.split("|"), c = S.cards.find(x => x.id === id), st = c.step || 0;
@@ -851,20 +1072,25 @@ const H = {
     for (const c of S.cards.filter(x => x.item_id === id)) await api.upd("recall_cards", c.id, on ? { active: true, step: 0, due: addDays(1) } : { active: false, due: null });
     toast(on ? "It'll come back tomorrow, then less and less often" : "Stopped"); renderSheet() },
   async reprocess(id) { const it = item(id); it.stage = "queued"; refresh(); const r = await api.fn("reprocess", { item_id: id }); if (r?.error) toast("Couldn't start: " + (r.message || r.error)); poll() },
-  async delete(id) { if (confirmDel !== id) { confirmDel = id; renderSheet(); return } await api.del("items", id); S.actions.forEach(a => { if (a.item_id === id) a.item_id = null }); S.sheet = null; refresh(); toast("Deleted") },
+  async delete(id) { if (confirmDel !== id) { confirmDel = id; renderSheet(); return } await api.del("items", id); S.actions.forEach(a => { if (a.item_id === id) a.item_id = null }); S.sheet = null; await api.loadFocus(); refresh(); toast("Deleted") },
   ask() { S.ask = S.ask || {}; openSheet({ type: "ask" }); setTimeout(() => $("#aq")?.focus(), 50) },
   askq(id) { $("#aq").value = id; doAsk() },
-  lib(id) { S.lib = id; S.area = ""; S.folder = ""; render() }, area(id) { S.area = S.area === id ? "" : id; S.lib = "all"; S.folder = ""; render(); scrollTo({ top: 0, behavior: "smooth" }) },
+  lib(id) { S.lib = id; S.area = ""; S.shelf = ""; S.folder = ""; render() },
+  grp(id) { if (S.lib === "areas") S.area = id; else { S.shelf = id; S.shelfTab = "todo" } S.folder = ""; render(); scrollTo({ top: 0, behavior: "smooth" }) },
+  shtab(id) { S.shelfTab = id; render() },
   gfopen(id) { gfSet(S.folder === id ? "" : id) },
-  mode(id) { S.mode = id; render() }, acttab(id) { S.actTab = id; render() }, more() { S.more = true; render() },
-  async makeact(id) { const a = S.actions.find(x => x.item_id === id && x.status === "suggested"); if (a) H.start(a.id); else H.open(id) },
-  newch() { openSheet({ type: "newch" }) },
-  async addch(id) { const [title, target, period, mode] = JSON.parse(id); await api.ins("challenges", { title, target, period, mode }); S.sheet = null; refresh() },
-  async delch(id) { await api.del("challenges", id); render() },
+  mode(id) { S.mode = id; render() }, more() { S.more = true; render() },
+  dismiss(id) { openSheet({ type: "dismiss", id, back: S.sheet }) },
+  async dismissed(v) { const [id, why] = v.split("|"); const back = S.sheet?.back;
+    if (why === "did") await api.upd("actions", id, { status: "done", done_at: now() }); else await api.upd("actions", id, { status: "dismissed", reflection: why === "big" ? "dismissed: too big" : "dismissed: not interested" });
+    S.sheet = back?.type === "item" ? back : null; refresh() },
   ownact(id) { openSheet({ type: "ownact", item: id || "" }); setTimeout(() => $("#oa")?.focus(), 50) },
-  async addown(id) { const t = $("#oa").value.trim(); if (!t) return; await api.ins("actions", { item_id: id || null, title: t, mode: $("#om").value, status: "doing", origin: "user", minutes: S.profile.daily_minutes || 15, started_at: now() }); S.sheet = id ? { type: "item", id } : null; S.actTab = "doing"; refresh() },
+  async addown(id) { const t = $("#oa").value.trim(), it = item(id); if (!t || !it) return;
+    const a = await api.ins("actions", { item_id: id, title: t.slice(0, 160), mode: $("#om").value, status: "suggested", origin: "user", minutes: S.profile.daily_minutes || 15 });
+    await api.lane(id, it.lane || null, { plan_action_id: a.id }); S.sheet = { type: "item", id }; refresh(); toast("📌 That's the plan") },
+  /* ---- you ---- */
   async interest(id) { const cur = S.profile.interests || []; await api.profile({ interests: cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id], onboarded_at: S.profile.onboarded_at || now() }); render() },
-  async commit() { await api.profile({ commitment: S.profile.commitment === "action_first" ? "none" : "action_first" }); render() },
+  async commit() { const on = S.profile.commitment === "none"; await api.profile({ commitment: on ? "action_first" : "none" }); render(); toast(on ? "Gate on. It works once the iPhone automation is set up." : "Gate off") },
   async watch() { await api.profile({ watch_video: S.profile.watch_video === false }); render() },
   async autorem() { await api.profile({ auto_remember: !S.profile.auto_remember }); render() },
   async capsetup() { S.newToken = ""; const { data } = await sb.from("capture_tokens").select("id,name,created_at,last_used_at").is("revoked_at", null).order("created_at", { ascending: false }); S.tokens = data || []; openSheet({ type: "capsetup" }) },
@@ -876,14 +1102,6 @@ const H = {
   },
   async revoke(id) { await sb.from("capture_tokens").update({ revoked_at: now() }).eq("id", id); S.tokens = S.tokens.filter(t => t.id !== id); renderSheet(); toast("Revoked") },
   async copy(v) { try { await navigator.clipboard.writeText(v); toast("Copied") } catch { toast("Select and copy it by hand") } },
-  async gate(choice) {
-    const f = focusAction(), app = S.sheet.app;
-    sb.from("gate_events").insert({ app: app || "", choice }).then(() => {});
-    if (choice === "do_now" && f) { S.sheet = null; await H.start(f.id); S.tab = "actions"; S.actTab = "doing"; return refresh() }
-    if (choice === "did_it" && f) return H.done(f.id);
-    const links = { instagram: "instagram://", youtube: "youtube://", x: "twitter://", twitter: "twitter://", reddit: "reddit://", tiktok: "https://www.tiktok.com/", facebook: "fb://" };
-    S.sheet = null; refresh(); if (links[app]) location.href = links[app];
-  },
   theme(v) { if (v === "flip") v = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; try { localStorage.setItem("gsd_theme", v) } catch {} applyTheme(); render() },
   authmode() { S.authMode = S.authMode === "up" ? "in" : "up"; S.authMsg = ""; render() },
   async signout() { await sb.auth.signOut(); S.screen = "auth"; S.sheet = null; refresh() },
@@ -913,15 +1131,26 @@ document.addEventListener("submit", async e => {
     if (!r.data.session) { S.authMsg = "Check your email to confirm your address, then sign in here."; S.authOk = true; S.authMode = "in"; render(); return }
     S.user = r.data.user; start() }
 });
-document.addEventListener("input", e => { if (e.target.id === "q") { S.q = e.target.value; $("#libgrid").innerHTML = libList(); gfMount() } });
+document.addEventListener("input", e => {
+  if (e.target.id === "q") { S.q = e.target.value; $("#libgrid").innerHTML = libList(); gfMount() }
+  if (e.target.id === "pq" && S.sheet?.type === "pick") { S.sheet.q = e.target.value; $("#picklist").innerHTML = pickList() }
+});
 document.addEventListener("change", async e => {
   const t = e.target;
-  if (t.id === "img" && t.files[0]) { try { const b64 = await fileToJpeg(t.files[0]); saveThing({ image_base64: b64, note: $("#sn")?.value.trim() || "" }) } catch { toast("Couldn't read that image") } }
-  if (t.dataset.save) api.profile({ [t.dataset.save]: t.dataset.save === "daily_minutes" ? Number(t.value) : t.value.trim(), onboarded_at: S.profile.onboarded_at || now() }).then(() => toast("Saved"));
+  if (t.id === "img" && t.files[0]) { try { const b64 = await fileToJpeg(t.files[0]); saveThing({ image_base64: b64, note: $("#sn")?.value.trim() || "", lane: S.sheet?.lane || "library" }) } catch { toast("Couldn't read that image") } }
+  if (t.dataset.save) { const k = t.dataset.save, num = ["daily_minutes", "weekly_goal", "pass_minutes", "pass_cap"].includes(k);
+    api.profile({ [k]: num ? Number(t.value) : t.value.trim(), onboarded_at: S.profile.onboarded_at || now() }).then(() => { toast("Saved"); if (num) render() }) }
   if (t.dataset.note) api.upd("items", t.dataset.note, { note: t.value.trim() }).then(() => toast("Note saved")).catch(() => {});
 });
 document.addEventListener("keydown", e => { if (e.key !== "Escape" || !S.sheet) return; if (S.sheet.menu) { S.sheet.menu = false; renderSheet(); $(".iv-tools .iv-ic")?.focus() } else H.close() });
-document.addEventListener("visibilitychange", () => { if (!document.hidden && S.screen === "app") poll() });
+// Coming back to the app after a while: reload quietly, so saves from the share sheet and passes spent at the gate show up.
+let hiddenAt = 0;
+document.addEventListener("visibilitychange", async () => {
+  if (document.hidden) { hiddenAt = Date.now(); return }
+  if (S.screen !== "app") return;
+  if (hiddenAt && Date.now() - hiddenAt > 30000 && (!S.sheet || ["item", "gate", "earned", "rules"].includes(S.sheet.type))) { try { await api.load(); refresh() } catch {} }
+  poll();
+});
 
 /* ---------- boot ---------- */
 const params = new URLSearchParams(location.search);
@@ -930,13 +1159,16 @@ try { if (location.search || history.state?.gsdSheet) history.replaceState(null,
 async function start() {
   try { await api.load() } catch (e) { S.screen = "error"; S.error = e.message || String(e); return render() }
   if (!S.profile) { S.screen = "error"; S.error = "Your profile wasn't created. Sign out and try again."; return render() }
-  if (S.focus && S.focus.action_id && !S.actions.some(a => a.id === S.focus.action_id)) S.focus.action_id = null;
-  if (!S.focus || (!S.focus.action_id && S.focus.state === "offered")) { const f = rank([])[0]; if (f) await api.setFocus({ action_id: f.id, state: f.status === "doing" ? "accepted" : "offered" }) }
-  S.screen = "app"; S.tab = !S.profile.onboarded_at && !S.items.length ? "profile" : "home";
+  S.screen = "app"; S.tab = !S.profile.onboarded_at && !S.items.length ? "profile" : "now";
+  let seen = true; try { seen = localStorage.getItem("gsd_rules") === "1"; localStorage.setItem("gsd_rules", "1") } catch {}
   if (incoming.gate) S.sheet = { type: "gate", app: incoming.gate.toLowerCase() };
+  else if (!seen) S.sheet = { type: "rules" };
   refresh(); poll();
   if (incoming.save) { const v = incoming.save; incoming.save = ""; saveThing({ text: v, via: "share_target" }) }
 }
+// The pass countdown on Now; when a pass runs out, the page catches up.
+let hadPass = false;
+setInterval(() => { if (S.screen !== "app") return; const ap = activePass(); document.querySelectorAll("[data-left]").forEach(el => { el.textContent = ap ? minsLeft(ap) : 0 }); if (hadPass && !ap) { render(); if (S.sheet?.type === "gate") renderSheet() } hadPass = !!ap }, 15000);
 async function boot() {
   if (!window.supabase) { $("#app").innerHTML = `<div class="center"><div class="auth"><h2>Couldn't load</h2><p class="mute" style="margin-top:8px">Check your connection and reload.</p></div></div>`; return }
   sb = window.supabase.createClient(CFG.url, CFG.key);
