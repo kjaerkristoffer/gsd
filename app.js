@@ -138,7 +138,7 @@ const api = {
     if (!actOf(id)) return api.lane(id, lane, extra);
     const { data, error } = await sb.from("actions").update({ lane, ...extra }).eq("id", id).select("*").single();
     if (error) { const m = error.message || ""; for (const k of ["now_full", "next_full", "already_plan"]) if (m.includes(k)) return k; console.error(error); toast("Couldn't move it"); return "error" }
-    Object.assign(actOf(id), data);
+    Object.assign(actOf(id), data); closeGaps();
     return "ok";
   },
   // Move a save between Now, Up next and the library. The database checks the caps, picks the slot and keeps the history.
@@ -146,7 +146,7 @@ const api = {
     const { data, error } = await sb.from("items").update({ lane, ...extra }).eq("id", id).select(ITEM_COLS).single();
     if (error) { const m = error.message || ""; if (/now_full/.test(m)) return "now_full"; if (/next_full/.test(m)) return "next_full"; console.error(error); toast("Couldn't move it"); return "error" }
     const cur = item(id); if (cur) Object.assign(cur, data); else S.items.unshift(data);
-    await api.refreshActs(id);
+    await api.refreshActs(id); closeGaps();
     return "ok";
   },
 };
@@ -170,6 +170,8 @@ const actOf = id => S.actions.find(a => a.id === id);
 const entry = id => item(id) || actOf(id);
 const nowItems = () => [...S.items.filter(i => i.lane === "now"), ...S.actions.filter(a => a.lane === "now")].sort((a, b) => a.slot - b.slot);
 const nextItems = () => [...S.items.filter(i => i.lane === "next"), ...S.actions.filter(a => a.lane === "next")].sort((a, b) => a.next_pos - b.next_pos);
+// Now fills from the front: what is in it is numbered 1..n in order, free slots come last (as the database does).
+const closeGaps = () => nowItems().forEach((x, k) => { x.slot = k + 1 });
 const itemActs = id => S.actions.filter(a => a.item_id === id && a.status !== "dismissed");
 // The plan: what doing a whole save means. Your pick, else the action that counts as doing it, else the first idea.
 // An action that sits in Now or Up next on its own is not the save's plan.
@@ -255,12 +257,14 @@ function gauge(done, goal) {
 }
 
 /* ---------- views ---------- */
-function slotCard(it) {
+// The slot number doubles as the drag handle (arrow keys move it too).
+const grip = (x, n) => `<button class="slot-n grip" data-act="nudge" data-id="${x.id}" aria-label="Slot ${n}. Drag, or use the arrow keys, to change the order" title="Drag to reorder">${n}</button>`;
+function slotCard(it, n = it.slot) {
   const pl = planOf(it), d = daysIn(it), link = safeUrl(pl?.link), sh = shelfOf(it);
-  return `<article class="slot">
+  return `<article class="slot" data-sid="${it.id}">
     <button class="slot-hd" data-act="open" data-id="${it.id}">${thumb(it, "slot-th")}
       <span class="slot-tx"><span class="tiny">${sh.em} ${esc(sh.name)} · ${d ? `${d} day${d > 1 ? "s" : ""} in Now` : "new in Now"}</span>
-      <b>${pending(it) ? '<span class="spin"></span> Reading…' : esc(it.title || "Untitled")}</b></span><span class="slot-n" aria-label="Slot ${it.slot}">${it.slot}</span></button>
+      <b>${pending(it) ? '<span class="spin"></span> Reading…' : esc(it.title || "Untitled")}</b></span></button>${grip(it, n)}
     ${pl ? `<div class="slot-plan"><b>${esc(pl.title)}</b> <span class="mute">· ${pl.minutes} min</span>${pl.first_step ? `<span class="slot-step">Start: ${esc(pl.first_step)}</span>` : ""}</div>`
       : `<div class="slot-plan mute">${pending(it) ? "A plan shows up once it's read." : "No plan needed: just do it. Or open it to pick one."}</div>`}
     ${d >= 7 ? `<p class="stale">${d} days in Now. Still the right one? Park it if not.</p>` : ""}
@@ -268,12 +272,12 @@ function slotCard(it) {
       ${link ? `<a class="btn sm ghost" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(pl.link_label || "Open it")} ↗</a>` : ""}
       <button class="btn sm line" data-act="park" data-id="${it.id}" title="Move it to Up next">Park</button></div></article>`;
 }
-function actSlot(a) {
+function actSlot(a, n = a.slot) {
   const it = item(a.item_id), d = daysIn(a), link = safeUrl(a.link);
-  return `<article class="slot">
+  return `<article class="slot" data-sid="${a.id}">
     <button class="slot-hd" data-act="open" data-id="${it ? it.id : ""}">${thumbX(a, "slot-th")}
       <span class="slot-tx"><span class="tiny">${actEm(a)} ${esc(actType(a))} · ${d ? `${d} day${d > 1 ? "s" : ""} in Now` : "new in Now"}</span>
-      <b>${esc(a.title)}</b>${it ? `<span class="tiny slot-from">from ${esc(it.title || "a save")}</span>` : ""}</span><span class="slot-n" aria-label="Slot ${a.slot}">${a.slot}</span></button>
+      <b>${esc(a.title)}</b>${it ? `<span class="tiny slot-from">from ${esc(it.title || "a save")}</span>` : ""}</span></button>${grip(a, n)}
     ${a.first_step || a.why ? `<div class="slot-plan">${a.first_step ? `<b>Start:</b> ${esc(a.first_step)}` : esc(a.why)}<span class="slot-step">${a.minutes} min</span></div>` : ""}
     ${d >= 7 ? `<p class="stale">${d} days in Now. Still the right one? Park it if not.</p>` : ""}
     <div class="slot-acts"><button class="btn sm keep" data-act="finish" data-id="${a.id}">✓ Done</button>
@@ -287,15 +291,16 @@ function emptySlot(n, sug) {
     <div class="slot-acts"><button class="btn sm ghost" data-act="pick">Choose…</button><button class="btn sm line" data-act="save" data-id="now">+ New</button></div></article>`;
 }
 // One row in Up next, the gate, swap and pick lists: a whole save (with its plan) or a single action (with its save).
-const nrow = (x, btn) => {
-  if (isAct(x)) { const it = item(x.item_id); return `<div class="nrow">${thumbX(x, "slot-th sm")}<button class="nrow-t" data-act="open" data-id="${it ? it.id : ""}"><b>${esc(x.title)}</b><span class="tiny">${actEm(x)} ${esc(it ? "from " + (it.title || "a save") : actType(x))}</span></button>${btn}</div>` }
+const nrow = (x, btn, lead = "", attrs = "") => {
+  if (isAct(x)) { const it = item(x.item_id); return `<div class="nrow"${attrs}>${lead}${thumbX(x, "slot-th sm")}<button class="nrow-t" data-act="open" data-id="${it ? it.id : ""}"><b>${esc(x.title)}</b><span class="tiny">${actEm(x)} ${esc(it ? "from " + (it.title || "a save") : actType(x))}</span></button>${btn}</div>` }
   const pl = planOf(x), sh = shelfOf(x);
-  return `<div class="nrow">${thumb(x, "slot-th sm")}<button class="nrow-t" data-act="open" data-id="${x.id}"><b>${esc(x.title || "Untitled")}</b><span class="tiny">${sh.em} ${esc(pl ? pl.title : sh.name)}${x.done_at ? ` · ${esc(doneVerb(x).toLowerCase())} before` : ""}</span></button>${btn}</div>` };
-const nextRow = (it, k) => nrow(it, `<div class="nrow-b">${k ? `<button class="ib" data-act="nextup" data-id="${it.id}" aria-label="Move up" title="Move up">↑</button>` : ""}<button class="ib" data-act="pull" data-id="${it.id}" aria-label="Move into Now" title="Move into Now">⚡</button><button class="ib" data-act="tolib" data-id="${it.id}" aria-label="Back to the library" title="Back to the library">✕</button></div>`);
+  return `<div class="nrow"${attrs}>${lead}${thumb(x, "slot-th sm")}<button class="nrow-t" data-act="open" data-id="${x.id}"><b>${esc(x.title || "Untitled")}</b><span class="tiny">${sh.em} ${esc(pl ? pl.title : sh.name)}${x.done_at ? ` · ${esc(doneVerb(x).toLowerCase())} before` : ""}</span></button>${btn}</div>` };
+const nextRow = it => nrow(it, `<div class="nrow-b"><button class="ib" data-act="pull" data-id="${it.id}" aria-label="Move into Now" title="Move into Now">⚡</button><button class="ib" data-act="tolib" data-id="${it.id}" aria-label="Back to the library" title="Back to the library">✕</button></div>`,
+  `<button class="grip ngrip" data-act="nudge" data-id="${it.id}" aria-label="Drag, or use the arrow keys, to change the order" title="Drag to reorder"><i></i><i></i><i></i></button>`, ` data-sid="${it.id}"`);
 function vNow() {
   const nw = nowItems(), nx = nextItems(), p = S.profile, g = goal(), wd = weekDone(), st = streak(), bk = banked(), ap = activePass(), ib = inbox(), du = dueCards();
   const h = new Date().getHours(), hi = h < 5 ? "Still up" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
-  const pool = [...nx, ...candidates()], free = [1, 2, 3].filter(n => !nw.some(i => i.slot === n));
+  const pool = [...nx, ...candidates()];
   const recent = live().filter(i => !i.lane).slice(0, 4);
   return `<h1>${hi}.<br>${nw.length ? `<em>${["", "One thing", "Two things", "Three things"][Math.min(3, nw.length)]}</em> in Now.` : `Now is <em>clear</em>.`}</h1>
   <p class="mute" style="margin-top:8px">${nw.length ? `Finish one to earn ${passMin()} minutes of scrolling.` : finished().length ? "You cleared it. Scrolling is open for a hunt: go find what's next." : "Pick up to three things you'll actually do. Everything else can wait."}</p>
@@ -305,9 +310,10 @@ function vNow() {
       <span class="chip">🔥 ${st ? `${st}-week streak` : "No streak yet"}</span>
       ${p.commitment !== "none" ? `<span class="chip">📵 Turned back ${turnedBack()}× this week</span>` : `<button class="chip" data-act="capsetup">📵 Set up the scroll gate</button>`}</div></div>
   <div class="sec"><div class="hd"><h2>Now<span class="cnt">${nw.length}/3</span></h2><button class="small mute" data-act="rules">How it works</button></div>
-    <div class="slots">${[1, 2, 3].map(n => { const it = nw.find(i => i.slot === n); return it ? (isAct(it) ? actSlot(it) : slotCard(it)) : emptySlot(n, pool[free.indexOf(n)]) }).join("")}</div></div>
+    <div class="slots" data-sort="now">${nw.map((it, k) => isAct(it) ? actSlot(it, k + 1) : slotCard(it, k + 1)).join("")}${[...Array(Math.max(0, 3 - nw.length))].map((_, k) => emptySlot(nw.length + k + 1, pool[k])).join("")}</div>
+    ${nw.length > 1 ? `<p class="tiny" style="margin-top:8px">Drag the numbers to change the order.</p>` : ""}</div>
   <div class="sec"><div class="hd"><h2>Up next<span class="cnt">${nx.length}/5</span></h2>${nx.length < 5 ? `<button class="small mute" data-act="pick" data-id="next">+ Add</button>` : ""}</div>
-    ${nx.length ? `<div class="nlist">${nx.map(nextRow).join("")}</div>` : `<p class="small mute">Line up what comes after Now. When a slot frees up, the first one here is ready to pull in.</p>`}</div>
+    ${nx.length ? `<div class="nlist" data-sort="next">${nx.map(nextRow).join("")}</div>` : `<p class="small mute">Line up what comes after Now. When a slot frees up, the first one here is ready to pull in.</p>`}</div>
   ${ib.length || du.length ? `<div class="sec"><div class="row">
     ${ib.length ? `<button class="btn ghost" data-act="triage">🗂️ Sort ${ib.length} new save${ib.length > 1 ? "s" : ""}</button>` : ""}
     ${du.length ? `<button class="btn ghost" data-act="review">🧠 Revisit ${du.length} idea${du.length > 1 ? "s" : ""}</button>` : ""}</div></div>` : ""}
@@ -1038,6 +1044,14 @@ const H = {
     if (r !== "ok") return;
     refresh(); toast(`Parked: ${where}`, async () => { if (await api.move(id, "now") === "ok") refresh(); else toast("Its slot is taken now") });
   },
+  nudge() {}, // the handle's click; dragging and arrow keys do the work
+  // A new order for Now or Up next (ids of saves and actions). Shown straight away, then saved.
+  async reorder(lane, ids) {
+    ids.forEach((id, k) => { const x = entry(id); if (x) { if (lane === "now") x.slot = k + 1; else x.next_pos = k + 1 } });
+    render();
+    const { error } = await sb.rpc("reorder_lane", { p_lane: lane, p_ids: ids });
+    if (error) { console.error(error); toast("Couldn't save the order"); try { await api.load() } catch {} render() }
+  },
   async nextup(id) { const l = nextItems(), k = l.findIndex(i => i.id === id); if (k < 1) return;
     await api.upd(actOf(id) ? "actions" : "items", id, { next_pos: k === 1 ? l[0].next_pos - 1 : (l[k - 2].next_pos + l[k - 1].next_pos) / 2 }); render() },
   async ivlane(v) { const [id, k] = v.split("|"), it = item(id); if (!it || (it.lane || "") === k && it.status !== "let_go") return;
@@ -1185,6 +1199,51 @@ document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   if (S.sheet?.menu && el.dataset.act !== "ivmenu") { S.sheet.menu = false; setTimeout(() => { if (S.sheet?.type === "item") renderSheet() }) } // any tap closes the ⋯ menu
   const fn = H[el.dataset.act]; if (fn) Promise.resolve(fn(el.dataset.id, e)).catch(err => console.error(err));
+});
+/* ---------- drag to reorder Now and Up next ----------
+   Pointer events, so it works with a mouse and with a finger. The handle has touch-action:none, so dragging it never scrolls the page.
+   While dragging, the others slide over to show where it will land. */
+let drag = null;
+document.addEventListener("pointerdown", e => {
+  const g = e.target.closest(".grip"); if (!g || e.button > 0) return;
+  const el = g.closest("[data-sid]"), box = el?.parentElement; if (!box?.dataset.sort) return;
+  const items = [...box.querySelectorAll(":scope > [data-sid]")]; if (items.length < 2) return;
+  e.preventDefault();
+  items.forEach(x => { x.style.animation = "none" });
+  drag = { el, box, items, rects: items.map(x => x.getBoundingClientRect()), from: items.indexOf(el), to: items.indexOf(el), x0: e.clientX, y0: e.clientY, pid: e.pointerId, moved: false };
+  try { g.setPointerCapture(e.pointerId) } catch {}
+  el.classList.add("dragging"); box.classList.add("sorting");
+});
+document.addEventListener("pointermove", e => {
+  if (!drag || e.pointerId !== drag.pid) return;
+  const { el, items, rects, from } = drag, dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+  if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+  el.style.transform = `translate(${dx}px,${dy}px) scale(1.025)`;
+  const r = rects[from], cx = r.left + r.width / 2 + dx, cy = r.top + r.height / 2 + dy;
+  let to = from, best = Infinity;
+  rects.forEach((q, k) => { const d = Math.hypot(q.left + q.width / 2 - cx, q.top + q.height / 2 - cy); if (d < best) { best = d; to = k } });
+  drag.to = to;
+  items.forEach((x, k) => { if (x === el) return;
+    const t = from < to && k > from && k <= to ? k - 1 : from > to && k >= to && k < from ? k + 1 : k, q = rects[t], p = rects[k];
+    x.style.transform = t === k ? "" : `translate(${q.left - p.left}px,${q.top - p.top}px)` });
+});
+function endDrag(e) {
+  if (!drag || (e && e.pointerId !== drag.pid)) return;
+  const { el, box, items, from, to } = drag; drag = null;
+  items.forEach(x => { x.style.transform = "" }); el.classList.remove("dragging"); box.classList.remove("sorting");
+  if (to === from) return;
+  const ids = items.map(x => x.dataset.sid), [m] = ids.splice(from, 1); ids.splice(to, 0, m);
+  H.reorder(box.dataset.sort, ids);
+}
+document.addEventListener("pointerup", endDrag);
+document.addEventListener("pointercancel", endDrag);
+document.addEventListener("keydown", e => {
+  const g = e.target.closest?.(".grip"), d = { ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 }[e.key]; if (!g || !d) return;
+  const box = g.closest("[data-sort]"), id = g.closest("[data-sid]")?.dataset.sid; if (!box || !id) return;
+  const ids = [...box.querySelectorAll(":scope > [data-sid]")].map(x => x.dataset.sid), k = ids.indexOf(id), j = k + d;
+  e.preventDefault(); if (j < 0 || j >= ids.length) return;
+  ids.splice(k, 1); ids.splice(j, 0, id);
+  H.reorder(box.dataset.sort, ids).then(() => document.querySelector(`[data-sid="${id}"] .grip`)?.focus());
 });
 document.addEventListener("submit", async e => {
   e.preventDefault(); const f = e.target.dataset.form;
