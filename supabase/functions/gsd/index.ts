@@ -5,7 +5,7 @@
 //   POST /gsd/ask          user token                    answer from the library with sources
 //   POST /gsd/suggest      user token                    two new actions for an item (optional steer)
 //   GET  /gsd/gate-check   capture token                 should the gate page open? (?app=instagram)
-// Now: three slots (items.lane = 'now'), Up next (lane = 'next', max 5). The database enforces the caps,
+// Now: three slots shared by saves (items.lane = 'now') and single actions (actions.lane = 'now'); Up next holds five. The database enforces the caps,
 // logs every stay in Now (focus_log) and banks a scroll pass when a Now item is finished (scroll_passes).
 // Secrets: OPENAI_API_KEY (required), SUPADATA_API_KEY (needed for video transcripts and watching).
 // Optional: MODEL_UNDERSTAND, MODEL_VISION, MODEL_ASK, MODEL_ENRICH, MODEL_EMBED, APP_ORIGINS.
@@ -687,7 +687,8 @@ async function processItem(item: any, diag: string[]): Promise<void> {
   await stage(item.id, upd);
 
   // One action per recommended thing, then the experiments.
-  await admin.from("actions").delete().eq("item_id", item.id).eq("status", "suggested").eq("origin", "ai");
+  // Re-reading replaces the AI's open ideas, but never one you have put in Now or Up next yourself.
+  await admin.from("actions").delete().eq("item_id", item.id).eq("status", "suggested").eq("origin", "ai").is("lane", null);
   const { data: kept } = await admin.from("actions").select("title").eq("item_id", item.id);
   const have = new Set((kept ?? []).map((a: any) => a.title.toLowerCase()));
   const resActs = found.map((r: any, idx: number) => {
@@ -848,16 +849,18 @@ async function gateCheck(req: Request, user: { id: string }) {
   const out = (gate: boolean, extra: Record<string, unknown> = {}) => json(req, { gate, open: gate ? "yes" : "no", ...extra });
   if (!p || p.commitment === "none") return out(false, { reason: "gate_off" });
   const nowIso = new Date().toISOString();
-  const [{ data: run }, { count: inNow }, { count: banked }] = await Promise.all([
+  const [{ data: run }, { count: savesInNow }, { count: actsInNow }, { count: banked }] = await Promise.all([
     admin.from("scroll_passes").select("ends_at,source").eq("user_id", user.id).gt("ends_at", nowIso).order("ends_at", { ascending: false }).limit(1).maybeSingle(),
     admin.from("items").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("lane", "now"),
+    admin.from("actions").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("lane", "now"),
     admin.from("scroll_passes").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("source", "earned").is("started_at", null),
   ]);
+  const inNow = (savesInNow ?? 0) + (actsInNow ?? 0);
   if (run) return out(false, { reason: run.source, minutes_left: Math.max(1, Math.ceil((new Date(run.ends_at).getTime() - Date.now()) / 60000)) });
   // Count the pause (once per two minutes, so a double open is not two).
   const { count: recent } = await admin.from("gate_events").select("id", { count: "exact", head: true }).eq("user_id", user.id).eq("choice", "shown").gte("created_at", new Date(Date.now() - 120000).toISOString());
   if (!recent) await admin.from("gate_events").insert({ user_id: user.id, app, choice: "shown" });
-  return out(true, { reason: inNow ? (banked ? "pass_available" : "earn_first") : "now_empty", now: inNow ?? 0, passes: banked ?? 0 });
+  return out(true, { reason: inNow ? (banked ? "pass_available" : "earn_first") : "now_empty", now: inNow, passes: banked ?? 0 });
 }
 
 // ---------- router ----------

@@ -133,6 +133,14 @@ const api = {
     return i.data;
   },
   async refreshActs(id) { const { data } = await sb.from("actions").select("*").eq("item_id", id); if (data) S.actions = [...data, ...S.actions.filter(x => x.item_id !== id)] },
+  // Move a save or a single action between Now, Up next and the library.
+  async move(id, lane, extra = {}) {
+    if (!actOf(id)) return api.lane(id, lane, extra);
+    const { data, error } = await sb.from("actions").update({ lane, ...extra }).eq("id", id).select("*").single();
+    if (error) { const m = error.message || ""; for (const k of ["now_full", "next_full", "already_plan"]) if (m.includes(k)) return k; console.error(error); toast("Couldn't move it"); return "error" }
+    Object.assign(actOf(id), data);
+    return "ok";
+  },
   // Move a save between Now, Up next and the library. The database checks the caps, picks the slot and keeps the history.
   async lane(id, lane, extra = {}) {
     const { data, error } = await sb.from("items").update({ lane, ...extra }).eq("id", id).select(ITEM_COLS).single();
@@ -156,15 +164,22 @@ const live = () => S.items.filter(i => i.status !== "let_go");
 const inbox = () => S.items.filter(i => i.status === "inbox" && !i.lane && !pending(i));
 const dueCards = () => S.cards.filter(c => c.active && c.due && c.due <= iso() && item(c.item_id) && item(c.item_id).status !== "let_go").sort((a, b) => a.due < b.due ? -1 : 1).slice(0, 5);
 const thumbUrl = it => it.thumb_path ? `${CFG.url}/storage/v1/object/public/thumbs/${it.thumb_path}` : "";
-// Now (three slots) and Up next (five, in order)
-const nowItems = () => S.items.filter(i => i.lane === "now").sort((a, b) => a.slot - b.slot);
-const nextItems = () => S.items.filter(i => i.lane === "next").sort((a, b) => a.next_pos - b.next_pos);
+// Now (three slots) and Up next (five, in order) hold whole saves and single actions, side by side.
+const isAct = x => !!x && "first_step" in x;
+const actOf = id => S.actions.find(a => a.id === id);
+const entry = id => item(id) || actOf(id);
+const nowItems = () => [...S.items.filter(i => i.lane === "now"), ...S.actions.filter(a => a.lane === "now")].sort((a, b) => a.slot - b.slot);
+const nextItems = () => [...S.items.filter(i => i.lane === "next"), ...S.actions.filter(a => a.lane === "next")].sort((a, b) => a.next_pos - b.next_pos);
 const itemActs = id => S.actions.filter(a => a.item_id === id && a.status !== "dismissed");
-// The plan: what doing this save means. Your pick, else the action that counts as doing it, else the first idea.
+// The plan: what doing a whole save means. Your pick, else the action that counts as doing it, else the first idea.
+// An action that sits in Now or Up next on its own is not the save's plan.
 function planOf(it) {
-  const acts = itemActs(it.id), open = acts.filter(a => a.status !== "done");
-  return acts.find(a => a.id === it.plan_action_id) || open.find(a => a.is_primary) || open.sort((x, y) => (x.resource_idx ?? 99) - (y.resource_idx ?? 99))[0] || null;
+  const acts = itemActs(it.id), open = acts.filter(a => a.status !== "done" && !a.lane);
+  return acts.find(a => a.id === it.plan_action_id && !a.lane) || open.find(a => a.is_primary) || open.sort((x, y) => (x.resource_idx ?? 99) - (y.resource_idx ?? 99))[0] || null;
 }
+// An action's own icon: what it recommends (article, film, repo…), else its kind of action.
+const actEm = a => { const r = item(a.item_id)?.resources?.[a.resource_idx]; return r ? RES[r.type] || "✨" : (MODE[a.mode] || MODE.grow)[0] };
+const actType = a => { const r = item(a.item_id)?.resources?.[a.resource_idx]; return r ? cap1(r.type) : (MODE[a.mode] || MODE.grow)[1] };
 const daysIn = it => it.lane_at ? Math.floor((Date.now() - new Date(it.lane_at)) / 864e5) : 0;
 const goal = () => S.profile.weekly_goal || 3;
 const passMin = () => S.profile.pass_minutes || 15;
@@ -204,21 +219,27 @@ const candidates = () => S.items.filter(i => !i.lane && i.status !== "let_go" &&
 
 /* ---------- pieces ---------- */
 const thumb = (it, cls = "thumb", extra = "") => `<div class="${cls}">${KIND[it.kind] || "✨"}${thumbUrl(it) ? `<img src="${esc(thumbUrl(it))}" alt="" loading="lazy" onerror="this.remove()">` : ""}${extra}</div>`;
-const badge = it => it.lane === "now" ? `<span class="bdg now">⚡ Now</span>` : it.lane === "next" ? `<span class="bdg">⏭ Next</span>`
-  : it.done_at ? `<span class="bdg done">${it.rating ? RATE[it.rating][0] : "✓"} ${esc(doneVerb(it))}</span>` : "";
+const badge = it => { const n = S.actions.filter(a => a.item_id === it.id && a.lane === "now").length;
+  return it.lane === "now" ? `<span class="bdg now">⚡ Now</span>` : n ? `<span class="bdg now">⚡ ${n} in Now</span>` : it.lane === "next" ? `<span class="bdg">⏭ Next</span>`
+  : it.done_at ? `<span class="bdg done">${it.rating ? RATE[it.rating][0] : "✓"} ${esc(doneVerb(it))}</span>` : "" };
+// A thumbnail for a save, or for a single action (its save's picture, with what it is in the corner).
+const thumbX = (x, cls) => { if (!isAct(x)) return thumb(x, cls); const it = item(x.item_id), u = it ? thumbUrl(it) : "";
+  return `<div class="${cls}">${actEm(x)}${u ? `<img src="${esc(u)}" alt="" loading="lazy" onerror="this.remove()"><span class="th-em" aria-hidden="true">${actEm(x)}</span>` : ""}</div>` };
 const tile = it => { const sh = shelfOf(it); return `<button class="tile" data-act="open" data-id="${it.id}">${thumb(it, "thumb", badge(it))}<div class="tx"><div class="t">${pending(it) ? '<span class="spin"></span> Reading…' : esc(it.title || it.url || "Untitled")}</div><div class="tiny">${sh.em} ${esc(sh.name)} · ${ago(it.created_at)}</div></div></button>` };
 // One idea inside its save. The plan is the one that counts: finishing the save finishes it.
 function actRow(a, it) {
-  const m = MODE[a.mode] || MODE.grow, isPlan = planOf(it)?.id === a.id, link = safeUrl(a.link);
+  const m = MODE[a.mode] || MODE.grow, isPlan = planOf(it)?.id === a.id, link = safeUrl(a.link), saveNow = it.lane === "now";
   return `<div class="card${isPlan ? " plan" : ""}"><div class="act"><div class="em" aria-hidden="true">${isPlan ? "📌" : m[0]}</div><div class="bd">
-    <h3>${esc(a.title)}</h3><div class="small mute">${a.minutes} min · ${m[1]}${isPlan ? " · the plan" : ""}</div>
+    <h3>${esc(a.title)}</h3><div class="small mute">${a.minutes} min · ${esc(actType(a))}${isPlan ? " · the plan" : ""}${a.lane === "now" ? ` · ⚡ in Now, slot ${a.slot}` : a.lane === "next" ? " · ⏭ in Up next" : ""}</div>
     ${a.why && a.status !== "done" ? `<p class="small" style="margin-top:8px">${esc(a.why)}</p>` : ""}
     ${a.status !== "done" && a.first_step ? `<p class="small" style="margin-top:8px"><b>Start:</b> ${esc(a.first_step)}</p>` : ""}
     ${isPlan && a.status !== "done" && a.steps?.length ? `<ul class="tk small">${a.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : ""}
     ${a.status === "done" ? `<div class="tiny" style="margin-top:6px">Done ${ago(a.done_at)}</div>` : ""}${a.reflection && !a.reflection.startsWith("dismissed:") && a.status !== "suggested" ? `<blockquote class="small" style="white-space:pre-wrap">${esc(a.reflection)}</blockquote>` : ""}
     <div class="row" style="margin-top:12px">${a.status === "done" ? ""
-      : isPlan ? (it.lane === "now" ? `<button class="btn sm keep" data-act="finish" data-id="${it.id}">✓ Done</button>` : `<button class="btn sm" data-act="plan" data-id="${a.id}">⚡ Do this now</button>`)
-      : `<button class="btn sm${it.lane === "now" ? " ghost" : ""}" data-act="plan" data-id="${a.id}">${it.lane === "now" ? "📌 Make this the plan" : "⚡ Do this now"}</button><button class="btn sm ghost" data-act="dismiss" data-id="${a.id}">Not for me</button>`}
+      : a.lane === "now" ? `<button class="btn sm keep" data-act="finish" data-id="${a.id}">✓ Done</button><button class="btn sm line" data-act="park" data-id="${a.id}">Park</button>`
+      : a.lane === "next" ? `<button class="btn sm" data-act="pull" data-id="${a.id}">⚡ Now</button><button class="btn sm ghost" data-act="tolib" data-id="${a.id}">Out of Up next</button>`
+      : isPlan && saveNow ? `<button class="btn sm keep" data-act="finish" data-id="${it.id}">✓ Done</button>`
+      : `<button class="btn sm" data-act="pull" data-id="${a.id}">⚡ Now</button><button class="btn sm ghost" data-act="tonext" data-id="${a.id}">⏭ Up next</button>${isPlan ? "" : `<button class="btn sm ghost" data-act="plan" data-id="${a.id}">📌 Make it the plan</button><button class="btn sm ghost" data-act="dismiss" data-id="${a.id}">Not for me</button>`}`}
       ${link && a.status !== "done" ? `<a class="btn sm line" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(a.link_label || "Open it")} ↗</a>` : ""}</div>
   </div></div></div>`;
 }
@@ -247,20 +268,36 @@ function slotCard(it) {
       ${link ? `<a class="btn sm ghost" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(pl.link_label || "Open it")} ↗</a>` : ""}
       <button class="btn sm line" data-act="park" data-id="${it.id}" title="Move it to Up next">Park</button></div></article>`;
 }
+function actSlot(a) {
+  const it = item(a.item_id), d = daysIn(a), link = safeUrl(a.link);
+  return `<article class="slot">
+    <button class="slot-hd" data-act="open" data-id="${it ? it.id : ""}">${thumbX(a, "slot-th")}
+      <span class="slot-tx"><span class="tiny">${actEm(a)} ${esc(actType(a))} · ${d ? `${d} day${d > 1 ? "s" : ""} in Now` : "new in Now"}</span>
+      <b>${esc(a.title)}</b>${it ? `<span class="tiny slot-from">from ${esc(it.title || "a save")}</span>` : ""}</span><span class="slot-n" aria-label="Slot ${a.slot}">${a.slot}</span></button>
+    ${a.first_step || a.why ? `<div class="slot-plan">${a.first_step ? `<b>Start:</b> ${esc(a.first_step)}` : esc(a.why)}<span class="slot-step">${a.minutes} min</span></div>` : ""}
+    ${d >= 7 ? `<p class="stale">${d} days in Now. Still the right one? Park it if not.</p>` : ""}
+    <div class="slot-acts"><button class="btn sm keep" data-act="finish" data-id="${a.id}">✓ Done</button>
+      ${link ? `<a class="btn sm ghost" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(a.link_label || "Open it")} ↗</a>` : ""}
+      <button class="btn sm line" data-act="park" data-id="${a.id}" title="Move it to Up next">Park</button></div></article>`;
+}
 function emptySlot(n, sug) {
   return `<article class="slot empty"><div class="slot-free"><span class="slot-n" aria-hidden="true">${n}</span><b>Free slot</b></div>
-    ${sug ? `<p class="tiny">${sug.lane === "next" ? "Next in line" : "A good fit from your library"}</p><button class="slot-pull" data-act="pull" data-id="${sug.id}" aria-label="Put ${esc(sug.title || "it")} in Now">${thumb(sug, "slot-th sm")}<span>${esc(sug.title || "Untitled")}</span><i aria-hidden="true">⚡</i></button>`
+    ${sug ? `<p class="tiny">${sug.lane === "next" ? "Next in line" : "A good fit from your library"}</p><button class="slot-pull" data-act="pull" data-id="${sug.id}" aria-label="Put ${esc(sug.title || "it")} in Now">${thumbX(sug, "slot-th sm")}<span>${esc(sug.title || "Untitled")}</span><i aria-hidden="true">⚡</i></button>`
       : `<p class="small mute">Save something worth doing, or share it here from Instagram.</p>`}
     <div class="slot-acts"><button class="btn sm ghost" data-act="pick">Choose…</button><button class="btn sm line" data-act="save" data-id="now">+ New</button></div></article>`;
 }
-const nrow = (it, btn) => { const pl = planOf(it), sh = shelfOf(it); return `<div class="nrow">${thumb(it, "slot-th sm")}<button class="nrow-t" data-act="open" data-id="${it.id}"><b>${esc(it.title || "Untitled")}</b><span class="tiny">${sh.em} ${esc(pl ? pl.title : sh.name)}${it.done_at ? ` · ${esc(doneVerb(it).toLowerCase())} before` : ""}</span></button>${btn}</div>` };
+// One row in Up next, the gate, swap and pick lists: a whole save (with its plan) or a single action (with its save).
+const nrow = (x, btn) => {
+  if (isAct(x)) { const it = item(x.item_id); return `<div class="nrow">${thumbX(x, "slot-th sm")}<button class="nrow-t" data-act="open" data-id="${it ? it.id : ""}"><b>${esc(x.title)}</b><span class="tiny">${actEm(x)} ${esc(it ? "from " + (it.title || "a save") : actType(x))}</span></button>${btn}</div>` }
+  const pl = planOf(x), sh = shelfOf(x);
+  return `<div class="nrow">${thumb(x, "slot-th sm")}<button class="nrow-t" data-act="open" data-id="${x.id}"><b>${esc(x.title || "Untitled")}</b><span class="tiny">${sh.em} ${esc(pl ? pl.title : sh.name)}${x.done_at ? ` · ${esc(doneVerb(x).toLowerCase())} before` : ""}</span></button>${btn}</div>` };
 const nextRow = (it, k) => nrow(it, `<div class="nrow-b">${k ? `<button class="ib" data-act="nextup" data-id="${it.id}" aria-label="Move up" title="Move up">↑</button>` : ""}<button class="ib" data-act="pull" data-id="${it.id}" aria-label="Move into Now" title="Move into Now">⚡</button><button class="ib" data-act="tolib" data-id="${it.id}" aria-label="Back to the library" title="Back to the library">✕</button></div>`);
 function vNow() {
   const nw = nowItems(), nx = nextItems(), p = S.profile, g = goal(), wd = weekDone(), st = streak(), bk = banked(), ap = activePass(), ib = inbox(), du = dueCards();
   const h = new Date().getHours(), hi = h < 5 ? "Still up" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
   const pool = [...nx, ...candidates()], free = [1, 2, 3].filter(n => !nw.some(i => i.slot === n));
   const recent = live().filter(i => !i.lane).slice(0, 4);
-  return `<h1>${hi}.<br>${nw.length ? `<em>${["", "One thing", "Two things", "Three things"][nw.length]}</em> in Now.` : `Now is <em>clear</em>.`}</h1>
+  return `<h1>${hi}.<br>${nw.length ? `<em>${["", "One thing", "Two things", "Three things"][Math.min(3, nw.length)]}</em> in Now.` : `Now is <em>clear</em>.`}</h1>
   <p class="mute" style="margin-top:8px">${nw.length ? `Finish one to earn ${passMin()} minutes of scrolling.` : finished().length ? "You cleared it. Scrolling is open for a hunt: go find what's next." : "Pick up to three things you'll actually do. Everything else can wait."}</p>
   <div class="sec gwrap">${gauge(wd, g)}
     <div class="chips gchips">${ap ? `<span class="chip b">⏱ <b data-left>${minsLeft(ap)}</b> min of scrolling left</span><button class="chip" data-act="endpass">End it now</button>`
@@ -268,7 +305,7 @@ function vNow() {
       <span class="chip">🔥 ${st ? `${st}-week streak` : "No streak yet"}</span>
       ${p.commitment !== "none" ? `<span class="chip">📵 Turned back ${turnedBack()}× this week</span>` : `<button class="chip" data-act="capsetup">📵 Set up the scroll gate</button>`}</div></div>
   <div class="sec"><div class="hd"><h2>Now<span class="cnt">${nw.length}/3</span></h2><button class="small mute" data-act="rules">How it works</button></div>
-    <div class="slots">${[1, 2, 3].map(n => { const it = nw.find(i => i.slot === n); return it ? slotCard(it) : emptySlot(n, pool[free.indexOf(n)]) }).join("")}</div></div>
+    <div class="slots">${[1, 2, 3].map(n => { const it = nw.find(i => i.slot === n); return it ? (isAct(it) ? actSlot(it) : slotCard(it)) : emptySlot(n, pool[free.indexOf(n)]) }).join("")}</div></div>
   <div class="sec"><div class="hd"><h2>Up next<span class="cnt">${nx.length}/5</span></h2>${nx.length < 5 ? `<button class="small mute" data-act="pick" data-id="next">+ Add</button>` : ""}</div>
     ${nx.length ? `<div class="nlist">${nx.map(nextRow).join("")}</div>` : `<p class="small mute">Line up what comes after Now. When a slot frees up, the first one here is ready to pull in.</p>`}</div>
   ${ib.length || du.length ? `<div class="sec"><div class="row">
@@ -522,7 +559,7 @@ function vProfile() {
       <div class="stat"><b>${turnedBack()}</b><span class="small mute">times you turned back this week</span></div>
       <div class="stat"><b>${ws.slips}</b><span class="small mute">${ws.slips === 1 ? "slip" : "slips"} this week</span></div>
       <div class="stat"><b>${parked}</b><span class="small mute">parked or dropped</span></div></div>
-    ${fin.length ? `<h3 style="margin-top:20px">Recently finished</h3><div class="stack" style="margin-top:10px;gap:8px">${fin.slice(0, 6).map(l => `<button class="frow" ${l.item_id && item(l.item_id) ? `data-act="open" data-id="${l.item_id}"` : "disabled"}><span aria-hidden="true">${KIND[l.kind] || "✨"}</span><b>${esc(l.title || "Untitled")}</b><span class="tiny">${l.rating ? RATE[l.rating][0] + " " : ""}${ago(l.ended_at)}</span></button>`).join("")}</div>` : ""}</div>
+    ${fin.length ? `<h3 style="margin-top:20px">Recently finished</h3><div class="stack" style="margin-top:10px;gap:8px">${fin.slice(0, 6).map(l => `<button class="frow" ${l.item_id && item(l.item_id) ? `data-act="open" data-id="${l.item_id}"` : "disabled"}><span aria-hidden="true">${KIND[l.kind] || RES[l.kind] || "✨"}</span><b>${esc(l.title || "Untitled")}</b><span class="tiny">${l.rating ? RATE[l.rating][0] + " " : ""}${ago(l.ended_at)}</span></button>`).join("")}</div>` : ""}</div>
   <div class="sec"><div class="hd"><h2>The rules</h2><button class="small mute" data-act="rules">How it works</button></div>
     <label class="l" for="wg" style="margin-top:0">Weekly goal: things finished from Now</label>
     <select class="field" id="wg" data-save="weekly_goal">${[1, 2, 3, 4, 5, 6, 7, 10, 14].map(n => `<option value="${n}" ${goal() == n ? "selected" : ""}>${n} a week</option>`).join("")}</select>
@@ -597,7 +634,14 @@ function sheetHtml() {
       ${s.show ? `<div class="card soft" style="margin-top:14px">${esc(c.a)}</div>
         <div class="row" style="margin-top:16px"><button class="btn keep" style="flex:1" data-act="rc" data-id="${c.id}|got">Got it</button><button class="btn ghost" style="flex:1" data-act="rc" data-id="${c.id}|almost">Almost</button><button class="btn ghost" style="flex:1" data-act="rc" data-id="${c.id}|forgot">Forgot</button></div>`
         : `<button class="btn" style="margin-top:16px" data-act="reveal">Show answer</button>`}` }
-  if (s.type === "finish") { const it = item(s.id);
+  if (s.type === "finish" && actOf(s.id)) { const a = actOf(s.id), it = item(a.item_id), inNow = a.lane === "now", room = banked().length < (S.profile.pass_cap || 3);
+    b = `<h2>${inNow ? `Nice. <em>GSD.</em>` : "Done?"}</h2><p class="mute" style="margin-top:4px">${esc(a.title)}${it ? ` <span class="tiny">· from ${esc(it.title)}</span>` : ""}</p>
+    <label class="l" for="rf">What did you take from it? (optional)</label>
+    <textarea class="field" id="rf" placeholder="One line is plenty">${esc(s.text ?? "")}</textarea>
+    <div class="row" style="margin-top:12px"><button class="chip ${s.wis ? "on" : ""}" data-act="tog" data-id="wis">${s.wis ? "✓ " : ""}💎 Also save the note to Wisdom</button></div>
+    <button class="btn keep" style="margin-top:18px;width:100%" data-act="dofinish" data-id="${a.id}" ${S.busy ? "disabled" : ""}>${S.busy ? '<span class="spin"></span>' : "✓"} Done</button>
+    <p class="tiny" style="margin-top:10px;text-align:center">${inNow ? (room ? `Earns a ${passMin()}-minute scroll pass.` : `Your pass bank is full (${S.profile.pass_cap || 3}). Spend one to earn more.`) : "Passes are earned by finishing things in Now."}</p>` }
+  else if (s.type === "finish") { const it = item(s.id);
     if (!it) b = `<h2>This save is gone.</h2>`;
     else { const inNow = it.lane === "now", room = banked().length < (S.profile.pass_cap || 3), recipe = it.kind === "recipe";
       b = `<h2>${inNow ? `Nice. <em>GSD.</em>` : esc(markOf(it))}</h2><p class="mute" style="margin-top:4px">${esc(it.title)}</p>
@@ -611,9 +655,10 @@ function sheetHtml() {
   if (s.type === "earned") { const nw = nowItems(), bk = banked(), pool = [...nextItems(), ...candidates()].slice(0, 3 - nw.length);
     b = `<div class="big-em" aria-hidden="true">${s.got ? "🎟️" : "✅"}</div><h2 style="text-align:center">${s.got ? `+${s.got} minutes <em>earned</em>` : "Done."}</h2>
     <p class="mute" style="text-align:center;margin-top:6px">${[bk.length ? `${bk.length} pass${bk.length > 1 ? "es" : ""} banked · ${bk.reduce((a, x) => a + x.minutes, 0)} min` : "", !nw.length ? "Now is clear. All three done 🎉" : "", weekDone() >= goal() ? `Weekly goal hit (${weekDone()}/${goal()}).` : `${weekDone()} of ${goal()} this week.`].filter(Boolean).join(" · ")}</p>
+    ${s.save && !item(s.save)?.done_at ? `<div class="gate-box" style="text-align:center"><p>That was the last one from <b>${esc(item(s.save).title)}</b>.</p><button class="btn ghost" data-act="finish" data-id="${s.save}">✓ Mark the whole save as done</button></div>` : ""}
     ${pool.length ? `<div class="tiny" style="margin:20px 0 6px">Fill the free slot</div><div class="nlist">${pool.map(it => nrow(it, `<button class="btn sm" data-act="pickit" data-id="${it.id}">⚡ Now</button>`)).join("")}</div>` : ""}
     <div class="row" style="margin-top:20px;justify-content:center">${s.back?.type === "gate" ? `<button class="btn" data-act="togate">Back to the gate</button>` : ""}<button class="btn${s.back?.type === "gate" ? " ghost" : ""}" data-act="close">Done</button></div>` }
-  if (s.type === "swap") { const it = item(s.id);
+  if (s.type === "swap") { const it = entry(s.id);
     b = `<h2>Now is <em>full</em></h2><p class="mute" style="margin-top:4px">Three is the point. Swap one out to make room for “${esc(it?.title || "this")}”.</p>
     <div class="nlist" style="margin-top:16px">${nowItems().map(o => nrow(o, `<button class="btn sm ghost" data-act="swapout" data-id="${o.id}">Swap out</button>`)).join("")}</div>
     <p class="tiny" style="margin-top:8px">The one you swap out goes first in Up next.</p>
@@ -816,6 +861,7 @@ function ivBody(it) {
     ${noteOpen ? `<div class="iv-note"><label class="iv-lbl" for="note">${IC.doc.replace("<svg", '<svg width="18" height="18"')} Your note</label><textarea class="field" id="note" data-note="${it.id}" placeholder="Why it matters to you" rows="3">${esc(it.note || "")}</textarea></div>`
       : `<button class="iv-addnote lgb" data-act="ivnote">${IC.doc} Add a note</button>`}
     <section class="iv-sec"><h3 class="iv-h">How to do it <button data-act="ownact" data-id="${it.id}">+ Your own</button></h3>
+      ${acts.length > 1 ? `<p class="small mute" style="margin:-6px 0 14px">Put the whole save in Now, or give any single one of these its own slot.</p>` : ""}
       ${acts.length ? `<div class="iv-cols">${acts.map(a => actRow(a, it)).join("")}</div>` : `<p class="small mute">No plan yet. Add your own, or just do it and tap ✓.</p>`}
       ${it.stage === "ready" ? `<form data-form="steer" data-id="${it.id}" class="row" style="margin-top:4px"><input class="field" id="steer" style="flex:1;min-width:160px" placeholder="Different ideas… (optional: “outdoors”, “shorter”)" aria-label="Steer new ideas"><button class="btn sm ghost" ${S.busy ? "disabled" : ""}>${S.busy ? '<span class="spin"></span>' : "Different ideas"}</button></form>` : ""}</section>
     ${it.takeaways?.length ? `<section class="iv-sec"><h3 class="iv-h">Key points</h3><ol class="iv-pts">${it.takeaways.map(k => `<li>${esc(k.text)}${k.t != null && it.source === "youtube" && u ? ` <a class="chip" style="padding:2px 8px" target="_blank" rel="noopener noreferrer" href="${esc(u + (u.includes("?") ? "&" : "?") + "t=" + k.t + "s")}">${ts(k.t)}</a>` : ""}</li>`).join("")}</ol></section>` : ""}
@@ -967,50 +1013,54 @@ const H = {
   },
   /* ---- Now, Up next and the library ---- */
   async toNow(id, plan) {
-    plan = plan || (item(id) && !item(id).plan_action_id ? planOf(item(id))?.id : null); // the default plan becomes the recorded one
-    const back = S.sheet, r = await api.lane(id, "now", plan ? { plan_action_id: plan } : {});
+    const it = item(id); // a whole save gets its default plan recorded; a single action is its own plan
+    if (it) plan = plan || (!it.plan_action_id || actOf(it.plan_action_id)?.lane ? planOf(it)?.id : null);
+    const back = S.sheet, r = await api.move(id, "now", it && plan ? { plan_action_id: plan } : {});
     if (r === "now_full") { openSheet({ type: "swap", id, plan, back }); return false }
+    if (r === "already_plan") { toast("That's already in Now, as the plan of its save"); return false }
     if (r !== "ok") return false;
-    refresh(); toast(`⚡ In Now · slot ${item(id)?.slot}`); return true;
+    refresh(); toast(`⚡ In Now · slot ${entry(id)?.slot}`); return true;
   },
   async toNext(id, front) {
-    const first = nextItems().find(i => i.id !== id), r = await api.lane(id, "next", front && first ? { next_pos: first.next_pos - 1 } : {});
+    const first = nextItems().find(i => i.id !== id), r = await api.move(id, "next", front && first ? { next_pos: first.next_pos - 1 } : {});
     if (r === "next_full") { toast("Up next holds five. Pull one into Now or send one back first."); return false }
     if (r !== "ok") return false;
     refresh(); return true;
   },
-  async tolib(id) { if (await api.lane(id, null, { status: "kept" }) === "ok") { refresh(); toast("Back on its shelf") } },
+  async tolib(id) { const a = !!actOf(id); if (await api.move(id, null, a ? {} : { status: "kept" }) === "ok") { refresh(); toast(a ? "Back with its save" : "Back on its shelf") } },
   pull(id) { return H.toNow(id) },
   async tonext(id) { if (await H.toNext(id)) toast("⏭ In Up next") },
   async park(id) {
     const first = nextItems()[0];
-    let r = await api.lane(id, "next", first ? { next_pos: first.next_pos - 1 } : {}), where = "first in Up next";
-    if (r === "next_full") { r = await api.lane(id, null, { status: "kept" }); where = "back on its shelf" }
+    const a = !!actOf(id);
+    let r = await api.move(id, "next", first ? { next_pos: first.next_pos - 1 } : {}), where = "first in Up next";
+    if (r === "next_full") { r = await api.move(id, null, a ? {} : { status: "kept" }); where = a ? "back with its save" : "back on its shelf" }
     if (r !== "ok") return;
-    refresh(); toast(`Parked: ${where}`, async () => { if (await api.lane(id, "now") === "ok") refresh(); else toast("Its slot is taken now") });
+    refresh(); toast(`Parked: ${where}`, async () => { if (await api.move(id, "now") === "ok") refresh(); else toast("Its slot is taken now") });
   },
   async nextup(id) { const l = nextItems(), k = l.findIndex(i => i.id === id); if (k < 1) return;
-    await api.upd("items", id, { next_pos: k === 1 ? l[0].next_pos - 1 : (l[k - 2].next_pos + l[k - 1].next_pos) / 2 }); render() },
+    await api.upd(actOf(id) ? "actions" : "items", id, { next_pos: k === 1 ? l[0].next_pos - 1 : (l[k - 2].next_pos + l[k - 1].next_pos) / 2 }); render() },
   async ivlane(v) { const [id, k] = v.split("|"), it = item(id); if (!it || (it.lane || "") === k && it.status !== "let_go") return;
     if (k === "now") return H.toNow(id);
     if (k === "next") { if (await H.toNext(id)) toast("⏭ In Up next"); return }
     if (it.status === "let_go") { await api.lane(id, null, { status: "kept", let_go_at: null }); refresh(); return toast("Back on its shelf") }
     H.tolib(id) },
-  async plan(aid) { const a = S.actions.find(x => x.id === aid), it = a && item(a.item_id); if (!it) return;
-    if (it.lane === "now") { if (await api.lane(it.id, "now", { plan_action_id: aid }) === "ok") { refresh(); toast("📌 That's the plan") } }
-    else H.toNow(it.id, aid) },
+  // The plan is what finishing the whole save means. Choosing it doesn't move anything.
+  async plan(aid) { const a = actOf(aid), it = a && item(a.item_id); if (!it) return;
+    if (a.lane) return toast("It has its own place in Now or Up next already");
+    if (await api.lane(it.id, it.lane || null, { plan_action_id: aid }) === "ok") { refresh(); toast("📌 That's the plan for this save") } },
   pick(id) { openSheet({ type: "pick", lane: id === "next" ? "next" : "now", q: "" }); setTimeout(() => $("#pq")?.focus(), 50) },
   async pickit(id) {
     if (S.sheet?.lane === "next") { if (await H.toNext(id)) { S.sheet = null; refresh(); toast("⏭ In Up next") } return }
     if (await H.toNow(id)) { S.sheet = null; refresh() } },
   async swapout(oldId) {
     const s = S.sheet, first = nextItems()[0];
-    let r = await api.lane(oldId, "next", first ? { next_pos: first.next_pos - 1 } : {});
-    if (r === "next_full") r = await api.lane(oldId, null, { status: "kept" });
+    let r = await api.move(oldId, "next", first ? { next_pos: first.next_pos - 1 } : {});
+    if (r === "next_full") r = await api.move(oldId, null, actOf(oldId) ? {} : { status: "kept" });
     if (r !== "ok") return;
-    const r2 = await api.lane(s.id, "now", s.plan ? { plan_action_id: s.plan } : {});
+    const r2 = await api.move(s.id, "now", item(s.id) && s.plan ? { plan_action_id: s.plan } : {});
     S.sheet = ["item", "triage"].includes(s.back?.type) ? s.back : null; refresh();
-    if (r2 === "ok") toast(`⚡ Swapped in · slot ${item(s.id)?.slot}`) },
+    if (r2 === "ok") toast(`⚡ Swapped in · slot ${entry(s.id)?.slot}`); else if (r2 === "already_plan") toast("That's already in Now, as the plan of its save") },
   async swapnext() { const s = S.sheet; if (await H.toNext(s.id, true)) { S.sheet = ["item", "triage"].includes(s.back?.type) ? s.back : null; refresh(); toast("⏭ First in Up next") } },
   async tlane(v) { const [id, k] = v.split("|");
     if (k === "now") { if (await H.toNow(id)) { S.sheet = { type: "triage" }; refresh() } }
@@ -1021,6 +1071,7 @@ const H = {
   rate(k) { const s = S.sheet; s.text = $("#rf").value; s.rating = s.rating === k ? null : k; renderSheet() },
   tog(k) { const s = S.sheet; s.text = $("#rf")?.value ?? s.text; s[k] = !s[k]; renderSheet() },
   async dofinish(id) {
+    if (actOf(id)) return H.finishAct(id);
     const it = item(id), s = S.sheet, text = $("#rf").value.trim(), inNow = it.lane === "now", before = banked().length, pl = planOf(it);
     S.busy = true; s.text = text; renderSheet();
     const r = await api.lane(id, null, { done_at: now(), done_count: (it.done_count || 0) + 1, rating: s.rating || null, done_note: text || it.done_note || "", status: "kept" });
@@ -1036,6 +1087,24 @@ const H = {
     await api.loadFocus();
     if (inNow) { const got = banked().length > before ? banked()[0].minutes : 0; render(); openSheet({ type: "earned", got, back: s.back }) }
     else { S.sheet = s.back?.type === "item" ? s.back : null; refresh(); toast(`✓ ${doneVerb(it)}${extra}`) }
+  },
+  // Finishing a single action. When it was the last open one of its save, offer to mark the save done too.
+  async finishAct(id) {
+    const a = actOf(id), s = S.sheet, text = $("#rf").value.trim(), inNow = a.lane === "now", before = banked().length, it = item(a.item_id);
+    S.busy = true; s.text = text; renderSheet();
+    const r = await api.move(id, null, { status: "done", done_at: now(), reflection: text || a.reflection || "" });
+    S.busy = false;
+    if (r !== "ok") return renderSheet();
+    let extra = "";
+    if (s.wis && text) {
+      const { data, error } = await sb.from("items").insert({ source: "note", kind: "quote", via: "app", title: text.split("\n")[0].slice(0, 80), summary: text, insight: text.slice(0, 240), content_text: text,
+        area: "Wisdom", area_locked: true, status: "kept", stage: "ready", quality: "full", note: "From: " + a.title }).select(ITEM_COLS).single();
+      if (error) toast("Couldn't save to Wisdom"); else { S.items.unshift(data); extra = " · saved to Wisdom" }
+    }
+    await api.loadFocus();
+    const last = it && !it.done_at && !itemActs(it.id).some(x => x.status !== "done") ? it.id : null;
+    if (inNow || last) { const got = inNow && banked().length > before ? banked()[0].minutes : 0; render(); openSheet({ type: "earned", got, save: last, back: s.back }) }
+    else { S.sheet = s.back?.type === "item" ? s.back : null; refresh(); toast("✓ Done" + extra) }
   },
   togate() { openSheet(S.sheet.back) },
   /* ---- passes and the gate ---- */
