@@ -540,7 +540,7 @@ function libList() {
   const q = S.q.toLowerCase().trim(), f = S.fid && fById(S.fid);
   if (S.lib === "folders" && !f && !q) { const fs = gfFolders();
     return fs.length ? `<div class="folders">${fs.map(gfFolder).join("")}</div>` : `<div class="card soft"><p class="mute">No folders yet. Tap ✏️ Folders to add your first one.</p></div>` }
-  let l = S.lib === "wisdom" ? live().filter(isWis) : S.lib === "inbox" ? S.items.filter(i => i.status === "inbox" && !i.lane) : S.lib === "let_go" ? S.items.filter(i => i.status === "let_go")
+  let l = S.lib === "latest" ? [...live()].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)) : S.lib === "wisdom" ? live().filter(isWis) : S.lib === "inbox" ? S.items.filter(i => i.status === "inbox" && !i.lane) : S.lib === "let_go" ? S.items.filter(i => i.status === "let_go")
     : S.lib === "done" ? live().filter(i => i.done_at).sort((a, b) => new Date(b.done_at) - new Date(a.done_at)) : live();
   if (f) {
     l = inFolder(f, l);
@@ -559,7 +559,7 @@ function vLibrary() {
   const f = S.fid && fById(S.fid), all = f ? inFolder(f) : [], nDone = all.filter(i => i.done_at).length, nTodo = all.length - nDone;
   return `<div class="lib-hd"><h1>Library</h1><button class="chip" data-act="folders">✏️ Folders</button></div>
   <div class="sec"><input class="field search" id="q" type="search" placeholder="Search your saves" value="${esc(S.q)}" aria-label="Search your saves"></div>
-  <div class="scroll" style="margin-top:12px">${[["folders", "📁 Folders"], ["all", "All"], ["done", "✓ Done"], ["wisdom", "💎 Wisdom"], ["inbox", "📥 Inbox"], ["let_go", "Let go"]].map(([k, t]) => `<button class="chip ${S.lib === k && !f ? "on" : ""}" data-act="lib" data-id="${k}">${t}</button>`).join("")}</div>
+  <div class="scroll" style="margin-top:12px">${[["folders", "📁 Folders"], ["all", "All"], ["latest", "🕒 Latest"], ["done", "✓ Done"], ["wisdom", "💎 Wisdom"], ["inbox", "📥 Inbox"], ["let_go", "Let go"]].map(([k, t]) => `<button class="chip ${S.lib === k && !f ? "on" : ""}" data-act="lib" data-id="${k}">${t}</button>`).join("")}</div>
   ${f ? `<div class="crumb sec"><button class="chip" data-act="lib" data-id="folders" aria-label="Back to folders">←</button><h2>${esc(fLabel(f))}</h2><span class="small mute">${all.length} save${all.length === 1 ? "" : "s"}</span>${f.id !== "none" ? `<button class="chip" data-act="fedit" data-id="${f.id}" aria-label="Edit ${esc(f.name)}" title="Edit folder">✏️</button>` : ""}</div>
     <div class="scroll" style="margin-top:12px" role="tablist" aria-label="Filter ${esc(f.name)}">${[["todo", `${esc(f.todo_label)} (${nTodo})`], ["done", `${/tested/i.test(f.done_label) ? "⭐" : "✓"} ${esc(f.done_label)} (${nDone})`], ["all", `All (${all.length})`]].map(([k, t]) => `<button role="tab" aria-selected="${S.shelfTab === k}" class="chip ${S.shelfTab === k ? "on" : ""}" data-act="shtab" data-id="${k}">${t}</button>`).join("")}</div>
     ${f.about ? `<p class="tiny" style="margin-top:8px">${esc(f.about)}</p>` : ""}` : ""}
