@@ -29,7 +29,9 @@ const shelfOf = it => it.area === "Wisdom" && it.source === "note" ? SHELF.wisdo
 const UNSORTED = { id: "none", emoji: "🗂️", name: "Unsorted", todo_label: "To do", done_label: "Done", about: "" };
 const fById = id => id === "none" ? UNSORTED : S.folders.find(f => f.id === id) || null;
 const folderOf = it => S.folders.find(f => f.id === it.folder_id) || UNSORTED;
-const inFolder = (f, l = live()) => l.filter(i => folderOf(i).id === f.id);
+// Notes kept with "Also save the note to Wisdom" live under the Library's 💎 Wisdom filter, not in a folder.
+const isWis = i => i.area === "Wisdom" && i.source === "note";
+const inFolder = (f, l = live()) => l.filter(i => !isWis(i) && folderOf(i).id === f.id);
 const fLabel = f => `${f.emoji} ${f.name}`;
 const RANK = { loved: 3, good: 2, meh: 1 };
 const byRating = (a, b) => (RANK[b.rating] || 0) - (RANK[a.rating] || 0) || (b.done_count || 0) - (a.done_count || 0) || new Date(b.done_at) - new Date(a.done_at);
@@ -174,16 +176,10 @@ const api = {
     if (error) { console.error(error); toast("Couldn't add the folder"); return null }
     S.folders.push(data); return data;
   },
-  // A note kept when finishing something goes to the 💎 Wisdom folder (made again if the person deleted it).
+  // A note kept when finishing something, shown under the Library's 💎 Wisdom filter.
   async saveWisdom(text, from) {
-    let f = S.folders.find(x => x.name.trim().toLowerCase() === "wisdom");
-    if (!f) {
-      const { data, error } = await sb.from("folders").insert({ name: "Wisdom", emoji: "💎", todo_label: "To remember", done_label: "Lived by",
-        about: "Your own notes and lessons, written when you finish something; not for saved links", pos: Math.max(0, ...S.folders.map(x => x.pos)) + 1 }).select().single();
-      if (!error) { S.folders.push(data); f = data }
-    }
     const { data, error } = await sb.from("items").insert({ source: "note", kind: "quote", via: "app", title: text.split("\n")[0].slice(0, 80), summary: text, insight: text.slice(0, 240), content_text: text,
-      area: "Wisdom", area_locked: true, folder_id: f?.id || null, status: "kept", stage: "ready", quality: "full", note: "From: " + from }).select(ITEM_COLS).single();
+      area: "Wisdom", area_locked: true, folder_id: null, status: "kept", stage: "ready", quality: "full", note: "From: " + from }).select(ITEM_COLS).single();
     if (error) { console.error(error); toast("Couldn't save to Wisdom"); return false }
     S.items.unshift(data); return true;
   },
@@ -544,7 +540,7 @@ function libList() {
   const q = S.q.toLowerCase().trim(), f = S.fid && fById(S.fid);
   if (S.lib === "folders" && !f && !q) { const fs = gfFolders();
     return fs.length ? `<div class="folders">${fs.map(gfFolder).join("")}</div>` : `<div class="card soft"><p class="mute">No folders yet. Tap ✏️ Folders to add your first one.</p></div>` }
-  let l = S.lib === "inbox" ? S.items.filter(i => i.status === "inbox" && !i.lane) : S.lib === "let_go" ? S.items.filter(i => i.status === "let_go")
+  let l = S.lib === "wisdom" ? live().filter(isWis) : S.lib === "inbox" ? S.items.filter(i => i.status === "inbox" && !i.lane) : S.lib === "let_go" ? S.items.filter(i => i.status === "let_go")
     : S.lib === "done" ? live().filter(i => i.done_at).sort((a, b) => new Date(b.done_at) - new Date(a.done_at)) : live();
   if (f) {
     l = inFolder(f, l);
@@ -553,6 +549,7 @@ function libList() {
   }
   if (q) l = l.filter(i => [i.title, i.summary, i.note, i.done_note, i.source, i.kind, folderOf(i).name, ...(i.tags || []), ...(i.takeaways || []).map(t => t.text), ...(i.resources || []).map(r => r.title)].join(" ").toLowerCase().includes(q));
   const empty = q ? "Nothing matches. Try Ask for questions in your own words."
+    : S.lib === "wisdom" ? "No wisdom yet. When you finish something, write what stuck with you and tap 💎 Also save the note to Wisdom."
     : f && S.shelfTab === "done" ? `Nothing in ${esc(f.done_label)} yet. Finish something from ${esc(f.name)} and rate it, and it lands here, best first.`
     : f && !inFolder(f).length ? "Nothing here yet. New saves that fit land here on their own, and you can move any save here from its page."
     : f && S.shelfTab === "todo" ? `Nothing open in ${esc(f.name)}. 🎉` : "Nothing here.";
@@ -562,7 +559,7 @@ function vLibrary() {
   const f = S.fid && fById(S.fid), all = f ? inFolder(f) : [], nDone = all.filter(i => i.done_at).length, nTodo = all.length - nDone;
   return `<div class="lib-hd"><h1>Library</h1><button class="chip" data-act="folders">✏️ Folders</button></div>
   <div class="sec"><input class="field search" id="q" type="search" placeholder="Search your saves" value="${esc(S.q)}" aria-label="Search your saves"></div>
-  <div class="scroll" style="margin-top:12px">${[["folders", "📁 Folders"], ["all", "All"], ["done", "✓ Done"], ["inbox", "📥 Inbox"], ["let_go", "Let go"]].map(([k, t]) => `<button class="chip ${S.lib === k && !f ? "on" : ""}" data-act="lib" data-id="${k}">${t}</button>`).join("")}</div>
+  <div class="scroll" style="margin-top:12px">${[["folders", "📁 Folders"], ["all", "All"], ["done", "✓ Done"], ["wisdom", "💎 Wisdom"], ["inbox", "📥 Inbox"], ["let_go", "Let go"]].map(([k, t]) => `<button class="chip ${S.lib === k && !f ? "on" : ""}" data-act="lib" data-id="${k}">${t}</button>`).join("")}</div>
   ${f ? `<div class="crumb sec"><button class="chip" data-act="lib" data-id="folders" aria-label="Back to folders">←</button><h2>${esc(fLabel(f))}</h2><span class="small mute">${all.length} save${all.length === 1 ? "" : "s"}</span>${f.id !== "none" ? `<button class="chip" data-act="fedit" data-id="${f.id}" aria-label="Edit ${esc(f.name)}" title="Edit folder">✏️</button>` : ""}</div>
     <div class="scroll" style="margin-top:12px" role="tablist" aria-label="Filter ${esc(f.name)}">${[["todo", `${esc(f.todo_label)} (${nTodo})`], ["done", `${/tested/i.test(f.done_label) ? "⭐" : "✓"} ${esc(f.done_label)} (${nDone})`], ["all", `All (${all.length})`]].map(([k, t]) => `<button role="tab" aria-selected="${S.shelfTab === k}" class="chip ${S.shelfTab === k ? "on" : ""}" data-act="shtab" data-id="${k}">${t}</button>`).join("")}</div>
     ${f.about ? `<p class="tiny" style="margin-top:8px">${esc(f.about)}</p>` : ""}` : ""}
