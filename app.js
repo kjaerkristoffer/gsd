@@ -174,6 +174,19 @@ const api = {
     if (error) { console.error(error); toast("Couldn't add the folder"); return null }
     S.folders.push(data); return data;
   },
+  // A note kept when finishing something goes to the 💎 Wisdom folder (made again if the person deleted it).
+  async saveWisdom(text, from) {
+    let f = S.folders.find(x => x.name.trim().toLowerCase() === "wisdom");
+    if (!f) {
+      const { data, error } = await sb.from("folders").insert({ name: "Wisdom", emoji: "💎", todo_label: "To remember", done_label: "Lived by",
+        about: "Your own notes and lessons, written when you finish something; not for saved links", pos: Math.max(0, ...S.folders.map(x => x.pos)) + 1 }).select().single();
+      if (!error) { S.folders.push(data); f = data }
+    }
+    const { data, error } = await sb.from("items").insert({ source: "note", kind: "quote", via: "app", title: text.split("\n")[0].slice(0, 80), summary: text, insight: text.slice(0, 240), content_text: text,
+      area: "Wisdom", area_locked: true, folder_id: f?.id || null, status: "kept", stage: "ready", quality: "full", note: "From: " + from }).select(ITEM_COLS).single();
+    if (error) { console.error(error); toast("Couldn't save to Wisdom"); return false }
+    S.items.unshift(data); return true;
+  },
   async refreshActs(id) { const { data } = await sb.from("actions").select("*").eq("item_id", id); if (data) S.actions = [...data, ...S.actions.filter(x => x.item_id !== id)] },
   // Move a save or a single action between Now, Up next and the library.
   async move(id, lane, extra = {}) {
@@ -1237,11 +1250,7 @@ const H = {
     if (r !== "ok") return renderSheet();
     if (pl && S.actions.find(x => x.id === pl.id)?.status !== "done") await api.upd("actions", pl.id, { status: "done", done_at: now() }).catch(() => {});
     let extra = "";
-    if (s.wis && text) {
-      const { data, error } = await sb.from("items").insert({ source: "note", kind: "quote", via: "app", title: text.split("\n")[0].slice(0, 80), summary: text, insight: text.slice(0, 240), content_text: text,
-        area: "Wisdom", area_locked: true, folder_id: it.folder_id || null, status: "kept", stage: "ready", quality: "full", note: "From: " + it.title }).select(ITEM_COLS).single();
-      if (error) toast("Couldn't save to Wisdom"); else { S.items.unshift(data); extra = " · saved to Wisdom" }
-    }
+    if (s.wis && text && await api.saveWisdom(text, it.title)) extra = " · saved to Wisdom";
     await api.loadFocus();
     if (inNow) { const got = banked().length > before ? banked()[0].minutes : 0; render(); openSheet({ type: "earned", got, back: s.back }) }
     else { S.sheet = s.back?.type === "item" ? s.back : null; refresh(); toast(`✓ ${doneVerb(it)}${extra}`) }
@@ -1254,11 +1263,7 @@ const H = {
     S.busy = false;
     if (r !== "ok") return renderSheet();
     let extra = "";
-    if (s.wis && text) {
-      const { data, error } = await sb.from("items").insert({ source: "note", kind: "quote", via: "app", title: text.split("\n")[0].slice(0, 80), summary: text, insight: text.slice(0, 240), content_text: text,
-        area: "Wisdom", area_locked: true, folder_id: it?.folder_id || null, status: "kept", stage: "ready", quality: "full", note: "From: " + a.title }).select(ITEM_COLS).single();
-      if (error) toast("Couldn't save to Wisdom"); else { S.items.unshift(data); extra = " · saved to Wisdom" }
-    }
+    if (s.wis && text && await api.saveWisdom(text, a.title)) extra = " · saved to Wisdom";
     await api.loadFocus();
     const last = it && !it.done_at && !itemActs(it.id).some(x => x.status !== "done") ? it.id : null;
     if (inNow || last) { const got = inNow && banked().length > before ? banked()[0].minutes : 0; render(); openSheet({ type: "earned", got, save: last, back: s.back }) }
