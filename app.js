@@ -915,6 +915,7 @@ function ivMenu(it) {
     ${S.cards.some(c => c.item_id === it.id) ? `<button role="menuitem" data-act="remember" data-id="${it.id}"><span aria-hidden="true">🧠</span>${it.remember ? "Stop remembering" : "Help me remember"}</button>` : ""}
     ${it.area === "Wisdom" && it.source === "note" ? "" : `<button role="menuitem" data-act="reprocess" data-id="${it.id}"><span aria-hidden="true">🔄</span>Re-read</button>`}
     ${canReadFully(it) && !fullBlocked() ? `<button role="menuitem" data-act="readfull" data-id="${it.id}"><span aria-hidden="true">🎧</span>Read it fully · ${costText(fullCost(it)).replace("about ", "~")}</button>` : ""}
+    ${it.stage === "ready" && it.enrich_state !== "pending" && !(it.area === "Wisdom" && it.source === "note") && (isRecipeIt(it) || ["video", "article", "note", "idea", "other"].includes(it.kind)) ? `<button role="menuitem" data-act="mkrecipe" data-id="${it.id}"><span aria-hidden="true">🍳</span>${recOf(it) ? "Rewrite the recipe" : isRecipeIt(it) ? "Write out the full recipe" : "Make it a recipe"}</button>` : ""}
     ${it.status !== "let_go" ? `<button role="menuitem" data-act="letgo" data-id="${it.id}"><span aria-hidden="true">🍃</span>Let go</button>` : ""}</div>`;
 }
 function ivHead(it) {
@@ -943,7 +944,7 @@ function ivEntities(it) {
       <div class="row">${it.source === "maps" && u ? `<a class="btn sm" target="_blank" rel="noopener noreferrer" href="${esc(u)}">Open the map ↗</a>` : `<a class="btn sm" target="_blank" rel="noopener noreferrer" href="https://www.google.com/maps/search/?api=1&query=${q}">Google Maps ↗</a>`}
       <a class="btn sm line" target="_blank" rel="noopener noreferrer" href="https://maps.apple.com/?q=${q}">Apple Maps ↗</a>${site ? `<a class="btn sm line" target="_blank" rel="noopener noreferrer" href="${esc(site)}">Website ↗</a>` : ""}</div>`)) }
   if (e.product?.name) out.push(card(`🛍️ ${esc(e.product.name)}`, `<div class="iv-xcs">${[e.product.brand, e.product.price].filter(Boolean).map(x => `<span class="iv-xc">${esc(x)}</span>`).join("")}</div>`));
-  if (e.recipe?.ingredients?.length) out.push(card(`🍽️ Ingredients`, `<ul class="tk small">${e.recipe.ingredients.map(x => `<li>${esc(x)}</li>`).join("")}</ul>${e.recipe.steps?.length ? `<h4 style="margin-top:14px">Steps</h4><ol class="small" style="padding-left:20px;margin:6px 0 0">${e.recipe.steps.map(x => `<li style="margin:4px 0">${esc(x)}</li>`).join("")}</ol>` : ""}
+  if (e.recipe?.ingredients?.length && !recOf(it)) out.push(card(`🍽️ Ingredients`, `<ul class="tk small">${e.recipe.ingredients.map(x => `<li>${esc(x)}</li>`).join("")}</ul>${e.recipe.steps?.length ? `<h4 style="margin-top:14px">Steps</h4><ol class="small" style="padding-left:20px;margin:6px 0 0">${e.recipe.steps.map(x => `<li style="margin:4px 0">${esc(x)}</li>`).join("")}</ol>` : ""}
     <div class="row"><button class="btn sm ghost" data-act="copy" data-id="${esc(e.recipe.ingredients.join("\n"))}">Copy the list</button></div>`));
   if (e.book?.title) out.push(card(`📖 ${esc(e.book.title)}`, e.book.author ? `<p>${esc(e.book.author)}</p>` : ""));
   if (e.film?.title) { const cc = JW[String(S.profile.country || "").toLowerCase().trim()] || "us";
@@ -953,6 +954,156 @@ function ivEntities(it) {
   if (e.workout?.exercises?.length) out.push(card(`🏃 Workout`, `<ul class="tk small">${e.workout.exercises.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`));
   if (e.event?.name) out.push(card(`🎟️ ${esc(e.event.name)}`, `<p>${esc([e.event.date, e.event.place].filter(Boolean).join(" · "))}</p>`));
   return out.length ? `<section class="iv-sec"><div class="iv-cols">${out.join("")}</div></section>` : "";
+}
+/* ---------- recipes ----------
+   A recipe save gets its own layout: a cookable card (amounts that scale, ticks, step timers, a full-screen cook mode that keeps
+   the screen on), the same card in Danish at a tap, and "Learn": what to understand about the cut, technique and ingredients,
+   with a trusted reference for each. The worker writes it out (entities.recipe, v 2); older saves can ask for it from the ⋯ menu. */
+const recOf = it => { const r = it?.entities?.recipe; return r && r.v === 2 && (r.groups || []).length && (r.method || []).length ? r : null };
+const isRecipeIt = it => it.kind === "recipe" || !!it.entities?.recipe?.ingredients?.length;
+const RL = {
+  en: { ing: "Ingredients", method: "Method", tools: "You'll need", tips: "Good to know", serv: n => `${n} serving${n === 1 ? "" : "s"}`, mult: k => `${String(k).replace(".5", "½").replace(/^0/, "")}× batch`,
+    total: "Total", prep: "prep", cook: "cook", level: "Level", from: "Cuisine", copy: "Copy shopping list", reset: "Clear ticks", start: "Cook", step: "Step", of: "of",
+    next: "Next", back: "Back", finish: "Finish", ready: "ready", min: "min", h: "h", uses: "For this step", diff: { easy: "Easy", medium: "Medium", hard: "Hard" }, made: "Makes" },
+  da: { ing: "Ingredienser", method: "Fremgangsmåde", tools: "Du skal bruge", tips: "Godt at vide", serv: n => `${n} ${n === 1 ? "person" : "personer"}`, mult: k => `${String(k).replace(".", ",")}× opskrift`,
+    total: "I alt", prep: "forb.", cook: "tilb.", level: "Niveau", from: "Køkken", copy: "Kopiér indkøbsliste", reset: "Nulstil", start: "Lav mad", step: "Trin", of: "af",
+    next: "Næste", back: "Tilbage", finish: "Færdig", ready: "klar", min: "min", h: "t", uses: "Til dette trin", diff: { easy: "Let", medium: "Mellem", hard: "Svær" }, made: "Giver" },
+};
+const LK = { cut: ["🥩", "The cut"], technique: ["🔥", "Technique"], ingredient: ["🧂", "Ingredient"], science: ["🔬", "The science"], safety: ["🛡️", "Safety"], equipment: ["🍳", "Equipment"] };
+let rLang = (() => { try { return localStorage.getItem("gsd_rlang") === "da" ? "da" : "en" } catch { return "en" } })();
+// Ticks, done steps and the chosen servings, per recipe, kept on this device so they survive a reload mid-cook.
+const RC = (() => { try { return JSON.parse(localStorage.getItem("gsd_rc") || "{}") } catch { return {} } })();
+const rcState = id => (RC[id] ||= { got: [], done: [], serv: null, mult: 1 });
+const rcSave = () => { try { const ks = Object.keys(RC); ks.slice(0, Math.max(0, ks.length - 60)).forEach(k => delete RC[k]); localStorage.setItem("gsd_rc", JSON.stringify(RC)) } catch {} };
+const rcItems = r => r.groups.flatMap(g => g.items);
+const rcFactor = (it, r) => { const st = rcState(it.id); return r.servings ? (st.serv || r.servings) / r.servings : st.mult || 1 };
+const FRAC = [[1 / 8, "⅛"], [1 / 4, "¼"], [1 / 3, "⅓"], [1 / 2, "½"], [2 / 3, "⅔"], [3 / 4, "¾"]];
+// Grams and millilitres round to what a scale shows; spoons, cups and pieces become kitchen fractions.
+function fmtAmt(n, unit, lang) {
+  const u = String(unit || "").toLowerCase(), dot = s => lang === "da" ? String(s).replace(".", ",") : String(s);
+  if (/^(g|gr|ml)$/.test(u)) return dot(n >= 100 ? Math.round(n / 5) * 5 : n >= 10 ? Math.round(n) : Math.round(n * 10) / 10);
+  if (/^(kg|l|cl|dl)$/.test(u)) return dot(Math.round(n * (u === "dl" || u === "cl" ? 10 : 100)) / (u === "dl" || u === "cl" ? 10 : 100));
+  if (n >= 10) return dot(Math.round(n));
+  // Eggs, cloves, cans: whole ones once there is at least one (1¼ eggs is no help), halves below that.
+  if (/^(|clove|cloves|fed|stk|piece|pieces|can|cans|dåse|dåser)$/.test(u)) n = n >= 1 ? Math.round(n) : Math.max(.5, Math.round(n * 2) / 2);
+  const w = Math.floor(n + 1e-9), f = n - w;
+  if (f < .06) return String(w || "⅛");
+  if (f > .94) return String(w + 1);
+  return `${w || ""}${FRAC.reduce((b, c) => Math.abs(c[0] - f) < Math.abs(b[0] - f) ? c : b)[1]}`;
+}
+function ingLine(x, k, lang) {
+  const da = lang === "da" && !(x.amount_da == null && x.amount != null), a = da ? x.amount_da : x.amount, unit = da ? x.unit_da : x.unit;
+  const max = x.amount_max ? (da ? (x.amount && x.amount_da ? x.amount_max * x.amount_da / x.amount : null) : x.amount_max) : null;
+  const q = a != null ? fmtAmt(a * k, unit, lang) + (max ? "–" + fmtAmt(max * k, unit, lang) : "") : "";
+  return { q: [q, q ? unit : ""].filter(Boolean).join(" "), name: lang === "da" ? x.item_da || x.item : x.item, note: lang === "da" ? x.note_da : x.note };
+}
+const rcTime = (m, L) => m == null ? "" : m >= 60 ? `${Math.floor(m / 60)} ${L.h}${m % 60 ? ` ${m % 60} ${L.min}` : ""}` : `${m} ${L.min}`;
+function rcShopping(it, r) {
+  const L = RL[rLang], k = rcFactor(it, r), st = rcState(it.id), head = r.servings ? L.serv(st.serv || r.servings) : k !== 1 ? L.mult(k) : "";
+  const title = rLang === "da" && r.title_da ? r.title_da : it.title;
+  return [`${title}${head ? ` (${head})` : ""}`, ...r.groups.flatMap(g => { const n = rLang === "da" ? g.name_da || g.name : g.name;
+    return [...(n ? ["", n] : []), ...g.items.map(x => { const l = ingLine(x, k, rLang); return `- ${[l.q, l.name].filter(Boolean).join(" ")}${l.note ? ` (${l.note})` : ""}` })] })].join("\n");
+}
+// Kitchen timers, one per step. They keep running while you scroll, switch steps or close the save; a tray shows the running ones.
+const TIMERS = new Map(); // "itemId|step" → { end, min, label, rang }
+let tickT = 0, AC = null;
+const actx = () => { try { AC ||= new (window.AudioContext || window.webkitAudioContext)(); AC.resume?.() } catch {} return AC };
+function beep() { const a = actx(); if (!a) return;
+  [0, .4, .8, 1.6, 2, 2.4].forEach(d => { const o = a.createOscillator(), g = a.createGain(), t = a.currentTime + d; o.frequency.value = 880; o.connect(g); g.connect(a.destination);
+    g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.35, t + .02); g.gain.exponentialRampToValueAtTime(.0001, t + .3); o.start(t); o.stop(t + .32) }) }
+const clock = ms => { const s = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` };
+const timerText = (key, min) => { const t = TIMERS.get(key); return !t ? `⏲ ${min} min` : t.rang ? "⏰ Done · tap to stop" : `⏲ ${clock(t.end - Date.now())}` };
+const timerBtn = (key, min) => { const t = TIMERS.get(key); return `<button class="rc-timer${t ? t.rang ? " ring" : " run" : ""}" data-act="rctimer" data-id="${esc(key)}" data-timer="${esc(key)}" data-min="${min}">${timerText(key, min)}</button>` };
+const trayHtml = () => [...TIMERS].map(([key, t]) => `<button class="${t.rang ? "ring" : ""}" data-act="rctimer" data-id="${esc(key)}">${t.rang ? "⏰" : "⏲"} ${esc(t.label)} · ${t.rang ? "done" : clock(t.end - Date.now())}</button>`).join("");
+function tick() {
+  for (const t of TIMERS.values()) if (!t.rang && t.end <= Date.now()) { t.rang = true; beep(); navigator.vibrate?.([400, 200, 400, 200, 400]); toast(`⏰ ${t.label} is done`) }
+  document.querySelectorAll("[data-timer]").forEach(el => { const t = TIMERS.get(el.dataset.timer); el.textContent = timerText(el.dataset.timer, el.dataset.min); el.classList.toggle("run", !!t && !t.rang); el.classList.toggle("ring", !!t?.rang) });
+  const tr = $("#rctray"); if (tr) tr.innerHTML = trayHtml();
+  if (!TIMERS.size) { clearInterval(tickT); tickT = 0 }
+}
+// Cook mode keeps the screen on (Screen Wake Lock), and takes it again when you come back to the app.
+let wakeL = null;
+async function wakeSync() {
+  const want = S.sheet?.type === "item" && S.sheet.cook != null && !document.hidden;
+  try { if (want && !wakeL && navigator.wakeLock) { wakeL = await navigator.wakeLock.request("screen"); wakeL.addEventListener("release", () => { wakeL = null }) }
+    else if (!want && wakeL) { const w = wakeL; wakeL = null; await w.release() } } catch {}
+}
+document.addEventListener("visibilitychange", wakeSync);
+const langSeg = () => `<div class="rc-lang" role="group" aria-label="Recipe language">${[["en", "EN", "English"], ["da", "DA", "Dansk"]].map(([k, s, n]) => `<button class="${rLang === k ? "on" : ""}" data-act="rclang" data-id="${k}" aria-pressed="${rLang === k}" title="${n}">${s}</button>`).join("")}</div>`;
+function rcStats(r, L) {
+  const tiles = [];
+  if (r.total_minutes) tiles.push([L.total, rcTime(r.total_minutes, L), [r.prep_minutes && `${rcTime(r.prep_minutes, L)} ${L.prep}`, r.cook_minutes && `${rcTime(r.cook_minutes, L)} ${L.cook}`].filter(Boolean).join(" · ")]);
+  tiles.push([L.level, L.diff[r.difficulty] || L.diff.medium, ""]);
+  const y = rLang === "da" ? r.yield_da || r.yield : r.yield;
+  if (y) tiles.push([L.made, y, ""]); else if (r.cuisine) tiles.push([L.from, r.cuisine, ""]);
+  return `<div class="rc-stats">${tiles.map(([a, b, c]) => `<div class="rc-stat"><span>${esc(a)}</span><b>${esc(b)}</b>${c ? `<small>${esc(c)}</small>` : ""}</div>`).join("")}</div>`;
+}
+function rcBar(it, r, L) {
+  const st = rcState(it.id), k = rcFactor(it, r);
+  return `<div class="rc-bar">${langSeg()}
+    <div class="rc-serv"><button data-act="rcserv" data-id="-1" aria-label="Fewer">−</button><span aria-live="polite">${esc(r.servings ? L.serv(st.serv || r.servings) : L.mult(k))}</span><button data-act="rcserv" data-id="1" aria-label="More">+</button></div>
+    <button class="rc-go lgb" data-act="rccook" data-id="open">▶ ${esc(L.start)}</button></div>`;
+}
+function rcIngredients(it, r, L, k) {
+  const st = rcState(it.id); let n = 0;
+  const groups = r.groups.map(g => { const name = rLang === "da" ? g.name_da || g.name : g.name;
+    return `${name ? `<h4 class="rc-g">${esc(name)}</h4>` : ""}<ul class="rc-list">${g.items.map(x => { const i = n++, l = ingLine(x, k, rLang), on = st.got.includes(i);
+      return `<li><button class="rc-i${on ? " on" : ""}" data-act="rcgot" data-id="${it.id}|${i}" role="checkbox" aria-checked="${on}"><span class="rc-ck" aria-hidden="true"></span><span class="rc-t">${l.q ? `<b>${esc(l.q)}</b> ` : ""}${esc(l.name)}${l.note ? `<small>${esc(l.note)}</small>` : ""}</span></button></li>` }).join("")}</ul>` }).join("");
+  const tools = (r.equipment || []).map(e => rLang === "da" ? e.da || e.en : e.en).filter(Boolean);
+  return `<h3 class="iv-h">${esc(L.ing)} <small id="rcgot">${st.got.length ? `${st.got.length}/${n} ${L.ready}` : n}</small></h3>
+    <div class="rc-box">${groups}</div>
+    <div class="row" style="margin-top:12px"><button class="btn sm ghost" data-act="rccopy" data-id="${it.id}">📋 ${esc(L.copy)}</button>${st.got.length || st.done.length ? `<button class="btn sm line" data-act="rcreset" data-id="${it.id}">${esc(L.reset)}</button>` : ""}</div>
+    ${tools.length ? `<h4 class="rc-g" style="margin-top:22px">${esc(L.tools)}</h4><div class="rc-tools">${tools.map(t => `<span class="iv-xc hi">${esc(t)}</span>`).join("")}</div>` : ""}`;
+}
+function rcSteps(it, r, L, k) {
+  const st = rcState(it.id), items = rcItems(r);
+  return `<h3 class="iv-h">${esc(L.method)} <small>${r.method.length}</small></h3><ol class="rc-steps">${r.method.map((s, i) => {
+    const on = st.done.includes(i), title = rLang === "da" ? s.title_da || s.title : s.title, uses = (s.uses || []).map(u => items[u]).filter(Boolean).map(x => ingLine(x, k, rLang));
+    return `<li class="rc-s${on ? " on" : ""}"><button class="rc-n" data-act="rcdone" data-id="${it.id}|${i}" aria-pressed="${on}" aria-label="${esc(L.step)} ${i + 1}">${on ? "✓" : i + 1}</button>
+      <div class="rc-sb">${title ? `<h4>${esc(title)}</h4>` : ""}<p>${esc(rLang === "da" ? s.text_da || s.text : s.text)}</p>
+        ${uses.length ? `<div class="rc-uses">${uses.map(l => `<span>${l.q ? `<b>${esc(l.q)}</b> ` : ""}${esc(l.name)}</span>`).join("")}</div>` : ""}
+        ${s.minutes ? timerBtn(`${it.id}|${i}`, s.minutes) : ""}</div></li>` }).join("")}</ol>
+    ${(r.tips || []).length ? `<h3 class="iv-h" style="margin-top:28px">${esc(L.tips)}</h3><ol class="iv-pts">${r.tips.map(t => `<li>${esc(rLang === "da" ? t.da || t.en : t.en)}</li>`).join("")}</ol>` : ""}`;
+}
+function rcSource(r) {
+  const u = safeUrl(r.source_url);
+  if (!r.source_note && !u) return "";
+  return `<p class="rc-src">${r.method_from === "completed" ? "✍️ " : "📎 "}${esc(r.source_note || "Full recipe from the creator's site.")}${u ? ` <a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(hostOf(u) || "Source")} ↗</a>` : ""}</p>`;
+}
+function rcLearn(it, r) {
+  if (!(r.learn || []).length) return "";
+  return `<section class="iv-sec"><h3 class="iv-h">🎓 Learn <small>get better at this dish</small></h3><div class="iv-cols">${r.learn.map(l => {
+    const [em, kind] = LK[l.kind] || LK.technique, u = safeUrl(l.url), q = encodeURIComponent(`${l.topic} ${l.source_name || "serious eats"}`);
+    return `<div class="iv-x rc-l"><div class="iv-xcs" style="margin:0 0 10px"><span class="iv-xc hi">${em} ${esc(kind)}</span></div><h4>${esc(l.topic)}</h4>${l.why ? `<p>${esc(l.why)}</p>` : ""}
+      ${(l.points || []).length ? `<ul>${l.points.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
+      ${u ? `<a class="iv-go" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(l.source_name || hostOf(u) || "Read more")} ↗</a>${l.source_title ? `<p class="xn">${esc(l.source_title)}</p>` : ""}`
+        : `<a class="iv-go" href="https://www.google.com/search?q=${q}" target="_blank" rel="noopener noreferrer">Look it up ↗</a>`}</div>` }).join("")}</div></section>`;
+}
+// The recipe itself, between the lane controls and the rest of the save.
+function rcCard(it, r) {
+  const L = RL[rLang], k = rcFactor(it, r);
+  return `${rcBar(it, r, L)}
+    <div class="rc-wrap"><div class="rc-main"><div class="rc-aside">${rcIngredients(it, r, L, k)}</div><div>${rcSteps(it, r, L, k)}${rcSource(r)}</div></div></div>
+    ${rcLearn(it, r)}`;
+}
+// A recipe save that isn't written out yet: being written, or a button to do it.
+function rcPending(it) {
+  if (it.enrich_state === "pending") return `<div class="rc-pend"><span class="spin"></span><div><b>Writing out the full recipe…</b><span>Amounts, method, timers, a Danish version and what to learn. Usually under a minute.</span></div></div>`;
+  return `<div class="rc-pend"><span aria-hidden="true" style="font-size:24px">🍳</span><div><b>Make it a full recipe</b><span>Steps with timers, scalable amounts, Danish, and what to learn.</span></div><button class="btn sm" data-act="mkrecipe" data-id="${it.id}">Write it out</button></div>`;
+}
+let cookEnter = false;
+function rcCook(it, r) {
+  const L = RL[rLang], n = r.method.length, i = Math.max(0, Math.min(n - 1, S.sheet.cook)), s = r.method[i], k = rcFactor(it, r), items = rcItems(r);
+  const uses = (s.uses || []).map(u => items[u]).filter(Boolean).map(x => ingLine(x, k, rLang)), title = rLang === "da" ? s.title_da || s.title : s.title, enter = cookEnter; cookEnter = false;
+  return `<div class="rc-cook${enter ? " enter" : ""}" role="dialog" aria-modal="true" aria-label="Cook mode">
+    <div class="rc-ctop"><button class="iv-ic lgb" data-act="rccook" data-id="close" aria-label="Close cook mode">${IC.x.replace('class="x-ic"', "")}</button>
+      <div class="rc-cprog"><span>${esc(L.step)} ${i + 1} ${esc(L.of)} ${n}</span><div class="rc-prog"><i style="width:${(i + 1) / n * 100}%"></i></div></div>${langSeg()}</div>
+    <div class="rc-cbody" id="rcc"><p class="rc-ckick">${esc(rLang === "da" && r.title_da ? r.title_da : it.title)}</p>
+      <h2>${esc(title || `${L.step} ${i + 1}`)}</h2><p class="rc-ctext">${esc(rLang === "da" ? s.text_da || s.text : s.text)}</p>
+      ${s.minutes ? timerBtn(`${it.id}|${i}`, s.minutes) : ""}
+      ${uses.length ? `<div class="rc-cuses"><h4>${esc(L.uses)}</h4><ul>${uses.map(l => `<li>${l.q ? `<b>${esc(l.q)}</b> ` : ""}${esc(l.name)}${l.note ? ` <small>${esc(l.note)}</small>` : ""}</li>`).join("")}</ul></div>` : ""}</div>
+    <div class="rc-cnav"><button class="btn ghost" data-act="rccook" data-id="prev" ${i === 0 ? "disabled" : ""}>← ${esc(L.back)}</button>
+      <button class="btn" data-act="rccook" data-id="${i === n - 1 ? "finish" : "next"}">${i === n - 1 ? `✓ ${esc(L.finish)}` : `${esc(L.next)} →`}</button></div></div>`;
 }
 function ivLane(it) {
   const cur = it.lane || "", gone = it.status === "let_go";
@@ -968,7 +1119,25 @@ function ivBody(it) {
   const ts = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`, d = daysIn(it), sh = shelfOf(it);
   const meta = [sname || hostOf(u), "saved " + ago(it.created_at), it.resaved_count ? `saved ${it.resaved_count + 1} times` : "",
     it.lane === "now" ? `⚡ In Now · ${d ? `${d} day${d > 1 ? "s" : ""}` : "since today"}` : it.lane === "next" ? "⏭ Up next" : it.status === "let_go" ? "🍃 Let go" : it.status === "inbox" ? "Unsorted" : `${sh.em} ${sh.name}`].filter(Boolean).join(" · ");
-  const noteOpen = S.sheet.noteOpen || it.note;
+  const noteOpen = S.sheet.noteOpen || it.note, r = recOf(it), recipe = isRecipeIt(it);
+  if (r) return `${ivHead(it)}
+    ${(it.tags || []).length ? `<div class="iv-tags">${it.tags.map(x => `<button class="iv-tag lgb" data-act="ivtag" data-id="${esc(x)}">${esc(tagLabel(x))}</button>`).join("")}</div>` : ""}
+    <h2 class="iv-title">${esc(it.title || "Untitled")}</h2>
+    ${rLang === "da" && r.title_da && r.title_da.toLowerCase() !== (it.title || "").toLowerCase() ? `<p class="rc-da">🇩🇰 ${esc(r.title_da)}</p>` : ""}
+    <p class="iv-meta">${esc(meta)}</p>
+    ${rcStats(r, RL[rLang])}
+    ${ivLane(it)}
+    ${it.summary ? `<p class="iv-sum">${esc(it.summary)}</p>` : ""}
+    ${rcCard(it, r)}
+    <hr class="iv-hr">
+    ${noteOpen ? `<div class="iv-note"><label class="iv-lbl" for="note">${IC.doc.replace("<svg", '<svg width="18" height="18"')} Your note</label><textarea class="field" id="note" data-note="${it.id}" placeholder="Notes for next time" rows="3">${esc(it.note || "")}</textarea></div>`
+      : `<button class="iv-addnote lgb" data-act="ivnote">${IC.doc} Add a note</button>`}
+    <section class="iv-sec"><h3 class="iv-h">The plan <button data-act="ownact" data-id="${it.id}">+ Your own</button></h3>
+      ${acts.length ? `<div class="iv-cols">${acts.map(a => actRow(a, it)).join("")}</div>` : `<p class="small mute">No plan yet. Add your own, or just cook it and tap ✓.</p>`}</section>
+    ${(it.resources || []).length ? `<section class="iv-sec"><h3 class="iv-h">Mentioned <small>${it.enrich_state === "pending" ? '<span class="spin"></span> Finding the links…' : it.resources.length}</small></h3>
+      <div class="iv-cols">${it.resources.map(x => resCard(x, it)).join("")}</div></section>` : ""}
+    ${rel?.length ? `<section class="iv-sec"><h3 class="iv-h">Related saves</h3><div class="iv-rel">${rel.map(tile).join("")}</div></section>` : ""}
+    <p class="iv-foot">${[it.opened_count ? `Opened ${it.opened_count} time${it.opened_count === 1 ? "" : "s"}` : "", it.quality === "caption_only" ? "Read from the caption only" : "", it.supadata_credits ? `${crWord(it.supadata_credits)} used` : ""].filter(Boolean).join(" · ")}</p>`;
   return `${ivHead(it)}
     ${(it.tags || []).length ? `<div class="iv-tags">${it.tags.map(x => `<button class="iv-tag lgb" data-act="ivtag" data-id="${esc(x)}">${esc(tagLabel(x))}</button>`).join("")}</div>` : ""}
     <h2 class="iv-title">${esc(it.title || "Untitled")}</h2>
@@ -977,6 +1146,7 @@ function ivBody(it) {
     ${it.stage === "failed" ? `<div class="banner" style="background:var(--red-bg);color:var(--red)">${esc(ERR[it.error_code] || "Something went wrong reading this.")}${it.diag ? `<br><span class="tiny" style="color:inherit;opacity:.8">Details: ${esc(it.diag)}</span>` : ""}
       <div class="row" style="margin-top:10px"><button class="btn sm" data-act="reprocess" data-id="${it.id}">Re-read</button></div></div>` : ""}
     ${it.summary ? `<p class="iv-sum">${esc(it.summary)}</p>` : ""}
+    ${recipe && it.stage === "ready" ? rcPending(it) : ""}
     <hr class="iv-hr">
     ${noteOpen ? `<div class="iv-note"><label class="iv-lbl" for="note">${IC.doc.replace("<svg", '<svg width="18" height="18"')} Your note</label><textarea class="field" id="note" data-note="${it.id}" placeholder="Why it matters to you" rows="3">${esc(it.note || "")}</textarea></div>`
       : `<button class="iv-addnote lgb" data-act="ivnote">${IC.doc} Add a note</button>`}
@@ -1004,7 +1174,9 @@ function itemView(it) {
       <div class="iv-scroll" id="ivs"><div class="iv-grid">
         <section class="iv-media" aria-label="Original">${ivMedia(it)}</section>
         <section class="iv-sheet lg">${ivBody(it)}</section>
-      </div></div></div></div>`;
+      </div></div>
+      <div class="rc-tray" id="rctray" aria-live="off">${trayHtml()}</div>
+      ${S.sheet.cook != null && recOf(it) ? rcCook(it, recOf(it)) : ""}</div></div>`;
 }
 function ivMount(same, top) {
   const iv = $(".iv"), sc = $("#ivs"); if (!iv || !sc) return;
@@ -1063,7 +1235,7 @@ function renderSheet() {
   document.body.style.overflow = S.sheet ? "hidden" : "";
   if (S.sheet?.type === "item") ivMount(same, top);
   if (keep) { const el = document.getElementById(keep.id); if (el) { el.value = keep.v; el.focus({ preventScroll: true }); try { el.setSelectionRange(keep.a, keep.b) } catch {} } }
-  setThemeColor(); syncHistory();
+  setThemeColor(); syncHistory(); wakeSync();
 }
 function openSheet(s) { S.sheet = s; confirmDel = null; renderSheet() }
 function refresh() { render(); renderSheet() }
@@ -1332,6 +1504,39 @@ const H = {
     if (error) return toast("Couldn't create a token"); S.tokens.unshift(data); S.newToken = tok; renderSheet();
   },
   async revoke(id) { await sb.from("capture_tokens").update({ revoked_at: now() }).eq("id", id); S.tokens = S.tokens.filter(t => t.id !== id); renderSheet(); toast("Revoked") },
+  rclang(l) { rLang = l === "da" ? "da" : "en"; try { localStorage.setItem("gsd_rlang", rLang) } catch {} renderSheet() },
+  rcserv(d) { const it = item(S.sheet?.id), r = recOf(it); if (!r) return; const st = rcState(it.id);
+    if (r.servings) st.serv = Math.max(1, Math.min(60, (st.serv || r.servings) + Number(d)));
+    else { const M = [.5, 1, 1.5, 2, 3, 4], j = Math.max(0, M.indexOf(st.mult || 1)); st.mult = M[Math.max(0, Math.min(M.length - 1, j + Number(d)))] }
+    rcSave(); renderSheet() },
+  // Ticks are flipped in place, so the page doesn't redraw under your thumb.
+  rcgot(v) { const [id, i] = v.split("|"), st = rcState(id), n = Number(i), on = !st.got.includes(n), r = recOf(item(id));
+    st.got = on ? [...st.got, n] : st.got.filter(x => x !== n); rcSave();
+    const b = document.querySelector(`[data-act="rcgot"][data-id="${v}"]`); b?.classList.toggle("on", on); b?.setAttribute("aria-checked", on);
+    const c = $("#rcgot"), all = r ? rcItems(r).length : 0; if (c) c.textContent = st.got.length ? `${st.got.length}/${all} ${RL[rLang].ready}` : all },
+  rcdone(v) { const [id, i] = v.split("|"), st = rcState(id), n = Number(i), on = !st.done.includes(n);
+    st.done = on ? [...st.done, n] : st.done.filter(x => x !== n); rcSave();
+    const b = document.querySelector(`[data-act="rcdone"][data-id="${v}"]`); if (b) { b.textContent = on ? "✓" : n + 1; b.setAttribute("aria-pressed", on); b.closest(".rc-s")?.classList.toggle("on", on) } },
+  rcreset(id) { const st = rcState(id); st.got = []; st.done = []; rcSave(); renderSheet() },
+  rccopy(id) { const it = item(id), r = recOf(it); if (r) H.copy(rcShopping(it, r)) },
+  rccook(v) { const s = S.sheet, it = item(s?.id), r = recOf(it); if (!r) return; const n = r.method.length, st = rcState(it.id);
+    if (v === "open") { s.cook = Math.max(0, r.method.findIndex((_, i) => !st.done.includes(i))); cookEnter = true }
+    else if (v === "close") s.cook = null;
+    else if (v === "finish") { st.done = r.method.map((_, i) => i); rcSave(); s.cook = null; toast("🍽️ Enjoy! Tap “I cooked it” once you've eaten") }
+    else { const j = Math.max(0, Math.min(n - 1, (s.cook ?? 0) + (v === "next" ? 1 : -1)));
+      if (v === "next" && !st.done.includes(s.cook)) { st.done.push(s.cook); rcSave() } s.cook = j }
+    renderSheet(); if (s.cook != null) $(".rc-cnav .btn:last-child")?.focus({ preventScroll: true }) },
+  rctimer(key) { const t = TIMERS.get(key);
+    if (t) TIMERS.delete(key);
+    else { const [id, i] = key.split("|"), r = recOf(item(id)), s = r?.method[Number(i)]; if (!s?.minutes) return;
+      actx(); TIMERS.set(key, { end: Date.now() + s.minutes * 60000, label: (rLang === "da" ? s.title_da || s.title : s.title) || `Step ${Number(i) + 1}`, rang: false });
+      if (!tickT) tickT = setInterval(tick, 1000) }
+    tick() },
+  async mkrecipe(id) { const it = item(id); if (!it) return; S.sheet && (S.sheet.menu = false);
+    const r = await api.fn("recipe", { item_id: id });
+    if (r?.error) { renderSheet(); return toast("Couldn't start: " + (r.message || r.error)) }
+    it.kind = "recipe"; it.enrich_state = "pending"; it.entities = { ...(it.entities || {}), recipe: { ...(it.entities?.recipe || {}), v: null } };
+    refresh(); poll() },
   async copy(v) { try { await navigator.clipboard.writeText(v); toast("Copied") } catch { toast("Select and copy it by hand") } },
   theme(v) { if (v === "flip") v = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; try { localStorage.setItem("gsd_theme", v) } catch {} applyTheme(); render() },
   authmode() { S.authMode = S.authMode === "up" ? "in" : "up"; S.authMsg = ""; render() },
@@ -1343,6 +1548,16 @@ async function doAsk() {
   const r = await api.fn("ask", { question: q });
   S.ask = { q, ...(r?.error ? { error: r.error === "ai_not_configured" ? ERR.ai_not_configured : (r.message || "Something went wrong.") } : r) }; if (S.sheet?.type === "ask") renderSheet();
 }
+document.addEventListener("keydown", e => {
+  if (S.sheet?.type !== "item" || S.sheet.cook == null || /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+  const v = { ArrowRight: "next", ArrowLeft: "prev", Escape: "close" }[e.key]; if (!v) return;
+  e.preventDefault(); e.stopImmediatePropagation(); H.rccook(v);
+}, true);
+// Swipe between steps in cook mode.
+let swipe = null;
+document.addEventListener("pointerdown", e => { if (e.target.closest?.("#rcc") && !e.target.closest("button")) swipe = { x: e.clientX, y: e.clientY } });
+document.addEventListener("pointerup", e => { if (!swipe) return; const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y; swipe = null;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) H.rccook(dx < 0 ? "next" : "prev") });
 document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   if (S.sheet?.menu && el.dataset.act !== "ivmenu") { S.sheet.menu = false; setTimeout(() => { if (S.sheet?.type === "item") renderSheet() }) } // any tap closes the ⋯ menu

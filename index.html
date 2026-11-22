@@ -442,6 +442,98 @@ a.iv-x:active{transform:scale(.975);transition-duration:.12s}
 @media (prefers-reduced-transparency:reduce){.iv-sheet::after,.iv-menu::after{background:var(--ivbg)}.iv-amb i{filter:blur(80px)}}
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.iv{--sheet:rgba(255,255,255,.86);--menu:#fff}:root[data-theme=dark] .iv{--sheet:rgba(24,24,24,.9);--menu:#262626}}
 
+/* ---------- recipe: stats, a sticky language/servings bar, ingredients you tick, steps with timers, cook mode, learn ---------- */
+.rc-da{font-size:15px;font-weight:600;color:var(--ivmute);margin-top:6px}
+.rc-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px;margin-top:16px}
+.rc-stat{padding:12px 14px;border-radius:20px;background:var(--in);box-shadow:inset 0 0 0 1px var(--in-line);min-width:0}
+.rc-stat span{display:block;font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ivmute)}
+.rc-stat b{display:block;font-size:19px;font-weight:700;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rc-stat small{display:block;font-size:12.5px;color:var(--ivmute);margin-top:2px}
+.rc-bar{position:sticky;top:calc(env(safe-area-inset-top) + 66px);z-index:5;display:flex;align-items:center;gap:6px;margin:28px -10px 6px;padding:5px;border-radius:999px;
+ background:var(--menu);-webkit-backdrop-filter:blur(22px) saturate(1.8);backdrop-filter:blur(22px) saturate(1.8);box-shadow:0 0 0 1px var(--in-line),0 12px 30px -14px rgba(0,0,0,.4)}
+.rc-lang{flex:none;display:flex;gap:2px;padding:3px;border-radius:999px;background:var(--in);box-shadow:inset 0 0 0 1px var(--in-line)}
+.rc-lang button{min-width:40px;min-height:34px;padding:0 10px;border-radius:999px;font-size:13.5px;font-weight:700;color:var(--ivmute);transition:background .2s,color .2s}
+.rc-lang button.on{background:var(--pill);color:var(--pillfg)}
+.rc-serv{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;gap:2px}
+.rc-serv button{flex:none;width:34px;height:34px;border-radius:50%;background:var(--in);box-shadow:inset 0 0 0 1px var(--in-line);font-size:18px;font-weight:600;display:grid;place-items:center}
+.rc-serv span{min-width:0;padding:0 6px;text-align:center;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rc-go{flex:none;min-height:40px;padding:0 16px;border-radius:999px;background:var(--ivfg);color:var(--ivbg);font-weight:700;font-size:14.5px;white-space:nowrap;--lgb-s:1.04;--lgb-p:.95}
+.rc-wrap{container-type:inline-size}
+.rc-main{display:grid;gap:30px;margin-top:22px}
+.rc-main .iv-h{margin-bottom:10px}
+.rc-box{padding:2px 16px 6px;border-radius:24px;background:var(--in);border:1px solid var(--in-line)}
+.rc-g{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ivmute);margin:16px 0 2px}
+.rc-list{list-style:none;margin:0;padding:0}
+.rc-i{display:flex;gap:12px;align-items:flex-start;width:100%;text-align:left;padding:11px 0;border-bottom:1px solid var(--hair);font-size:16px;line-height:1.4;color:inherit}
+.rc-list li:last-child .rc-i{border-bottom:0}
+.rc-ck{flex:none;width:22px;height:22px;margin-top:0;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--hair2);display:grid;place-items:center;transition:background .2s,box-shadow .2s}
+.rc-i.on .rc-ck{background:var(--green);box-shadow:none}
+.rc-i.on .rc-ck::after{content:"";width:5px;height:10px;border:solid #fff;border-width:0 2.5px 2.5px 0;transform:translateY(-1px) rotate(45deg)}
+.rc-t{flex:1;min-width:0;transition:opacity .2s}
+.rc-i.on .rc-t{opacity:.42;text-decoration:line-through}
+.rc-t b{font-weight:700;font-variant-numeric:tabular-nums}
+.rc-t small{display:block;font-size:13.5px;color:var(--ivmute);margin-top:1px}
+.rc-tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.rc-steps{list-style:none;margin:0;padding:0}
+.rc-s{display:flex;gap:14px;padding:16px 0;border-bottom:1px solid var(--hair)}
+.rc-s:first-child{padding-top:4px}.rc-s:last-child{border:0}
+.rc-n{flex:none;width:34px;height:34px;border-radius:50%;background:var(--pill);color:var(--pillfg);font-weight:700;font-size:15px;display:grid;place-items:center;transition:background .2s,transform .45s var(--spring)}
+.rc-n:active{transform:scale(.9)}
+.rc-s.on .rc-n{background:var(--green);color:#fff}
+.rc-sb{flex:1;min-width:0;transition:opacity .2s}
+.rc-s.on .rc-sb{opacity:.45}
+.rc-sb h4{font-size:17px;font-weight:700;margin:5px 0 4px}
+.rc-sb p{font-size:16.5px;line-height:1.55;text-wrap:pretty}
+.rc-uses{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.rc-uses span{padding:4px 11px;border-radius:999px;background:var(--in);box-shadow:inset 0 0 0 1px var(--in-line);font-size:13px}
+.rc-timer{display:inline-flex;align-items:center;gap:6px;margin-top:12px;min-height:38px;padding:0 15px;border-radius:999px;background:var(--in);box-shadow:inset 0 0 0 1px var(--in-line);font-weight:650;font-size:14px;font-variant-numeric:tabular-nums;transition:transform .45s var(--spring)}
+.rc-timer.run{background:var(--orange);color:#111;box-shadow:none}
+.rc-timer.ring{background:var(--red);color:#fff;box-shadow:none;animation:rcRing 1s ease-in-out infinite}
+@keyframes rcRing{50%{transform:scale(1.06)}}
+.rc-src{font-size:13.5px;line-height:1.45;color:var(--ivmute);margin-top:18px;padding:12px 16px;border-radius:18px;background:var(--in);border:1px solid var(--in-line)}
+.rc-src a{color:var(--ivfg);font-weight:600;text-decoration:underline;text-underline-offset:2px}
+.rc-l ul{margin:12px 0 0;padding:0 0 0 18px}
+.rc-l li{font-size:14.5px;line-height:1.45;margin:6px 0}
+.rc-pend{display:flex;align-items:center;gap:14px;margin-top:18px;padding:16px 18px;border-radius:22px;background:var(--in);border:1px solid var(--in-line)}
+.rc-pend>div{flex:1;min-width:0}.rc-pend b{display:block;font-size:16px}.rc-pend span:not(.spin){display:block;font-size:13.5px;color:var(--ivmute);margin-top:2px}
+.rc-pend .btn{flex:none}
+@container (min-width:620px){
+ .rc-main{grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:30px;align-items:start}
+}
+/* on the big screen the ingredients stay in view while you scroll the method */
+@media (min-width:900px){@container (min-width:620px){.rc-aside{position:sticky;top:76px;max-height:calc(var(--winh) - 120px);overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--hair2) transparent;padding-bottom:4px}}}
+/* timers that are running, wherever you are in the save */
+.rc-tray{position:absolute;z-index:8;left:50%;bottom:calc(18px + env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;gap:8px;max-width:calc(100% - 24px);overflow-x:auto;scrollbar-width:none}
+.rc-tray:empty{display:none}
+.rc-tray button{flex:none;min-height:44px;padding:0 18px;border-radius:999px;background:rgba(20,20,22,.84);color:#fff;font-weight:650;font-size:14.5px;font-variant-numeric:tabular-nums;white-space:nowrap;
+ -webkit-backdrop-filter:blur(18px) saturate(1.6);backdrop-filter:blur(18px) saturate(1.6);box-shadow:0 12px 30px -10px rgba(0,0,0,.5)}
+.rc-tray button.ring{background:var(--red);animation:rcRing 1s ease-in-out infinite}
+/* cook mode: one step at a time, big type, screen kept on */
+.rc-cook{position:absolute;inset:0;z-index:9;display:flex;flex-direction:column;gap:10px;background:var(--ivbg);color:var(--ivfg);padding:calc(env(safe-area-inset-top) + 12px) 18px calc(16px + env(safe-area-inset-bottom));
+ --in:rgba(0,0,0,.05);--in-line:rgba(0,0,0,.09)}
+:root[data-theme=dark] .rc-cook{--in:rgba(255,255,255,.08);--in-line:rgba(255,255,255,.14)}
+.rc-cook.enter{animation:ivFade .25s ease}
+.rc-cook~.rc-tray,.rc-tray:has(~.rc-cook){bottom:calc(96px + env(safe-area-inset-bottom));z-index:10}
+.rc-ctop{display:flex;align-items:center;gap:12px;max-width:820px;width:100%;margin:0 auto}
+.rc-cprog{flex:1;min-width:0}
+.rc-cprog span{font-size:13px;font-weight:700;color:var(--ivmute)}
+.rc-prog{height:5px;margin-top:7px;border-radius:9px;background:var(--in-line);overflow:hidden}
+.rc-prog i{display:block;height:100%;border-radius:inherit;background:var(--ivfg);transition:width .35s var(--ease)}
+.rc-cbody{flex:1;min-height:0;overflow-y:auto;width:100%;max-width:820px;margin:0 auto;padding:22px 4px 70px;touch-action:pan-y}
+.rc-ckick{font-size:14px;font-weight:600;color:var(--ivmute)}
+.rc-cbody h2{font-size:clamp(28px,5vw,42px);font-weight:750;line-height:1.12;letter-spacing:-.015em;margin-top:6px}
+.rc-ctext{font-size:clamp(21px,3.3vw,29px);line-height:1.45;margin-top:16px;text-wrap:pretty}
+.rc-cook .rc-timer{min-height:54px;padding:0 24px;font-size:19px;margin-top:22px}
+.rc-cuses{margin-top:26px;padding:10px 18px 12px;border-radius:22px;background:var(--in);border:1px solid var(--in-line)}
+.rc-cuses h4{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ivmute);margin:6px 0 4px}
+.rc-cuses ul{list-style:none;margin:0;padding:0}
+.rc-cuses li{font-size:18px;line-height:1.4;padding:8px 0;border-bottom:1px solid var(--hair)}.rc-cuses li:last-child{border:0}
+.rc-cuses small{color:var(--ivmute);font-size:14px}
+.rc-cnav{display:flex;gap:10px;width:100%;max-width:820px;margin:0 auto}
+.rc-cnav .btn{flex:1;min-height:58px;font-size:17px}
+.rc-cnav .btn:disabled{opacity:.4}
+@media (min-width:900px){.rc-bar{top:12px;margin:28px -14px 6px}.rc-cook{padding:28px 40px 32px}}
+
 /* ---------- Now: the weekly gauge, three slots, Up next ---------- */
 .gwrap{display:flex;flex-direction:column;align-items:center;gap:16px}
 .gchips{justify-content:center}
