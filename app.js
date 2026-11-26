@@ -68,7 +68,7 @@ const RES_LABEL = { article: "Read it", paper: "Read the paper", book: "See the 
 const PRICE = { "gpt-6-luna": [.1, .5], "gpt-6.1-terra": [1, 5], "gpt-6.1-sol": [2, 10], "gpt-6-astra": [10, 50], "text-embedding-3-small": [.02, 0] };
 const BUDGET = 5;
 const LADDER = [1, 3, 7, 14, 30, 60, 120];
-const ITEM_COLS = "id,url,canonical_url,source,kind,title,author,thumb_path,start_seconds,summary,insight,takeaways,quotes,entities,area,tags,note,status,stage,error_code,quality,resaved_count,remember,last_surfaced_at,opened_count,created_at,diag,resources,enrich_state,lane,slot,lane_at,next_pos,plan_action_id,done_at,done_count,rating,done_note,folder_id,area_locked,deep_read,supadata_credits,duration_seconds";
+const ITEM_COLS = "id,url,canonical_url,source,kind,title,author,thumb_path,start_seconds,summary,insight,takeaways,quotes,entities,area,tags,note,status,stage,error_code,quality,resaved_count,remember,last_surfaced_at,opened_count,created_at,diag,resources,enrich_state,lane,slot,lane_at,next_pos,plan_action_id,done_at,done_count,rating,done_note,folder_id,area_locked,deep_read,supadata_credits,duration_seconds,study,position";
 const ERR = {
   private_or_missing: "This post is private or was removed. GSD can only read public links.",
   unreadable: "GSD couldn't read this page. You can still add your own note.",
@@ -101,7 +101,7 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { ap
 /* ---------- state ---------- */
 const S = { screen: "boot", user: null, profile: null, items: [], actions: [], cards: [], log: [], passes: [], gates: [], tokens: [],
   tab: "now", sheet: null, q: "", fid: "", shelfTab: "todo", lib: "folders", folder: "", folders: [], mode: "inspire", seen: new Set(), ask: null,
-  authMode: "in", authMsg: "", busy: false, related: {}, more: false, newToken: "" };
+  authMode: "in", authMsg: "", busy: false, related: {}, more: false, newToken: "", highlights: [], studyBusy: {} };
 let sb = null, confirmDel = null;
 
 /* ---------- data ---------- */
@@ -109,16 +109,17 @@ const must = r => { if (r.error) throw r.error; return r.data };
 const api = {
   async load() {
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
-    const [p, i, a, c, u, f] = await Promise.all([
+    const [p, i, a, c, u, f, h] = await Promise.all([
       sb.from("profiles").select("*").eq("user_id", S.user.id).maybeSingle(),
       sb.from("items").select(ITEM_COLS).order("created_at", { ascending: false }).limit(1000),
       sb.from("actions").select("*").order("created_at", { ascending: false }).limit(3000),
       sb.from("recall_cards").select("id,item_id,q,a,active,step,due").limit(5000),
       sb.from("ai_calls").select("job,model,in_tokens,out_tokens,searches").gte("created_at", monthStart).limit(5000),
       sb.from("folders").select("*").order("pos").order("created_at"),
+      sb.from("highlights").select("*").order("created_at", { ascending: false }).limit(5000),
       api.loadFocus(),
     ]);
-    S.profile = must(p); S.items = must(i); S.actions = must(a); S.cards = must(c); S.usage = u.data || []; S.folders = must(f);
+    S.profile = must(p); S.items = must(i); S.actions = must(a); S.cards = must(c); S.usage = u.data || []; S.folders = must(f); S.highlights = h.data || [];
   },
   // Now's history, the scroll passes and the gate's pauses: what the gauge and the stats are made of.
   async loadFocus() {
@@ -283,7 +284,7 @@ const tile = it => { const f = folderOf(it); return `<button class="tile" data-a
 function actRow(a, it) {
   const m = MODE[a.mode] || MODE.grow, isPlan = planOf(it)?.id === a.id, link = safeUrl(a.link), saveNow = it.lane === "now";
   return `<div class="card${isPlan ? " plan" : ""}"><div class="act"><div class="em" aria-hidden="true">${isPlan ? "📌" : m[0]}</div><div class="bd">
-    <h3>${esc(a.title)}</h3><div class="small mute">${a.minutes} min · ${esc(actType(a))}${isPlan ? " · the plan" : ""}${a.lane === "now" ? ` · ⚡ in Now, slot ${a.slot}` : a.lane === "next" ? " · ⏭ in Up next" : ""}</div>
+    <h3><button class="act-open" data-act="openact" data-id="${a.id}">${esc(a.title)} <span aria-hidden="true">›</span></button></h3><div class="small mute">${a.minutes} min · ${esc(actType(a))}${hlOf(it.id, a.id).length ? ` · 📓 ${hlOf(it.id, a.id).length}` : ""}${isPlan ? " · the plan" : ""}${a.lane === "now" ? ` · ⚡ in Now, slot ${a.slot}` : a.lane === "next" ? " · ⏭ in Up next" : ""}</div>
     ${a.why && a.status !== "done" ? `<p class="small" style="margin-top:8px">${esc(a.why)}</p>` : ""}
     ${a.status !== "done" && a.first_step ? `<p class="small" style="margin-top:8px"><b>Start:</b> ${esc(a.first_step)}</p>` : ""}
     ${isPlan && a.status !== "done" && a.steps?.length ? `<ul class="tk small">${a.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : ""}
@@ -326,7 +327,7 @@ function slotCard(it, n = it.slot) {
 function actSlot(a, n = a.slot) {
   const it = item(a.item_id), d = daysIn(a), link = safeUrl(a.link);
   return `<article class="slot" data-sid="${a.id}">
-    <button class="slot-hd" data-act="open" data-id="${it ? it.id : ""}">${thumbX(a, "slot-th")}
+    <button class="slot-hd" data-act="openact" data-id="${a.id}">${thumbX(a, "slot-th")}
       <span class="slot-tx"><span class="tiny">${actEm(a)} ${esc(actType(a))} · ${d ? `${d} day${d > 1 ? "s" : ""} in Now` : "new in Now"}</span>
       <b>${esc(a.title)}</b>${it ? `<span class="tiny slot-from">from ${esc(it.title || "a save")}</span>` : ""}</span></button>${grip(a, n)}
     ${a.first_step || a.why ? `<div class="slot-plan">${a.first_step ? `<b>Start:</b> ${esc(a.first_step)}` : esc(a.why)}<span class="slot-step">${a.minutes} min</span></div>` : ""}
@@ -343,7 +344,7 @@ function emptySlot(n, sug) {
 }
 // One row in Up next, the gate, swap and pick lists: a whole save (with its plan) or a single action (with its save).
 const nrow = (x, btn, lead = "", attrs = "") => {
-  if (isAct(x)) { const it = item(x.item_id); return `<div class="nrow"${attrs}>${lead}${thumbX(x, "slot-th sm")}<button class="nrow-t" data-act="open" data-id="${it ? it.id : ""}"><b>${esc(x.title)}</b><span class="tiny">${actEm(x)} ${esc(it ? "from " + (it.title || "a save") : actType(x))}</span></button>${btn}</div>` }
+  if (isAct(x)) { const it = item(x.item_id); return `<div class="nrow"${attrs}>${lead}${thumbX(x, "slot-th sm")}<button class="nrow-t" data-act="openact" data-id="${x.id}"><b>${esc(x.title)}</b><span class="tiny">${actEm(x)} ${esc(it ? "from " + (it.title || "a save") : actType(x))}</span></button>${btn}</div>` }
   const pl = planOf(x), sh = shelfOf(x);
   return `<div class="nrow"${attrs}>${lead}${thumb(x, "slot-th sm")}<button class="nrow-t" data-act="open" data-id="${x.id}"><b>${esc(x.title || "Untitled")}</b><span class="tiny">${sh.em} ${esc(pl ? pl.title : sh.name)}${x.done_at ? ` · ${esc(doneVerb(x).toLowerCase())} before` : ""}</span></button>${btn}</div>` };
 const nextRow = it => nrow(it, `<div class="nrow-b"><button class="ib" data-act="pull" data-id="${it.id}" aria-label="Move into Now" title="Move into Now">⚡</button><button class="ib" data-act="tolib" data-id="${it.id}" aria-label="Back to the library" title="Back to the library">✕</button></div>`,
@@ -547,13 +548,16 @@ function libList() {
     if (S.shelfTab === "todo") l = l.filter(i => !i.done_at);
     if (S.shelfTab === "done") l = l.filter(i => i.done_at).sort(byRating);
   }
-  if (q) l = l.filter(i => [i.title, i.summary, i.note, i.done_note, i.source, i.kind, folderOf(i).name, ...(i.tags || []), ...(i.takeaways || []).map(t => t.text), ...(i.resources || []).map(r => r.title)].join(" ").toLowerCase().includes(q));
+  if (q) l = l.filter(i => [i.title, i.summary, i.note, i.done_note, ...hlOf(i.id).map(h => h.text), i.source, i.kind, folderOf(i).name, ...(i.tags || []), ...(i.takeaways || []).map(t => t.text), ...(i.resources || []).map(r => r.title)].join(" ").toLowerCase().includes(q));
   const empty = q ? "Nothing matches. Try Ask for questions in your own words."
-    : S.lib === "wisdom" ? "No wisdom yet. When you finish something, write what stuck with you and tap 💎 Also save the note to Wisdom."
+    : S.lib === "wisdom" ? "No wisdom yet. Star ☆ a note in any notebook, or when you finish something, write what stuck with you and tap 💎 Also save the note to Wisdom."
     : f && S.shelfTab === "done" ? `Nothing in ${esc(f.done_label)} yet. Finish something from ${esc(f.name)} and rate it, and it lands here, best first.`
     : f && !inFolder(f).length ? "Nothing here yet. New saves that fit land here on their own, and you can move any save here from its page."
     : f && S.shelfTab === "todo" ? `Nothing open in ${esc(f.name)}. 🎉` : "Nothing here.";
-  return l.length ? `<div class="grid">${l.map(tile).join("")}</div>` : `<p class="mute" style="padding:30px 0;text-align:center">${empty}</p>`;
+  const stars = S.lib === "wisdom" && !f ? S.highlights.filter(h => h.starred && item(h.item_id) && (!q || h.text.toLowerCase().includes(q))) : [];
+  const starHtml = stars.length ? `<div class="wis-hl">${stars.map(h => { const sj = subjOfHl(h), [em] = HK[h.kind] || HK.insight;
+    return `<button class="card wh k-${h.kind}" data-act="${h.action_id ? "openact" : "open"}" data-id="${h.action_id || h.item_id}"><p><span aria-hidden="true">${em}</span> ${esc(h.text)}</p><span class="tiny">${RES[sj.type] || KIND[sj.it.kind] || "✨"} ${esc(sj.title)}${h.at ? ` · ${esc(h.at)}` : ""}</span></button>` }).join("")}</div>` : "";
+  return starHtml + (l.length ? `<div class="grid"${starHtml ? ' style="margin-top:14px"' : ""}>${l.map(tile).join("")}</div>` : starHtml ? "" : `<p class="mute" style="padding:30px 0;text-align:center">${empty}</p>`);
 }
 function vLibrary() {
   const f = S.fid && fById(S.fid), all = f ? inFolder(f) : [], nDone = all.filter(i => i.done_at).length, nTodo = all.length - nDone;
@@ -1105,6 +1109,143 @@ function rcCook(it, r) {
     <div class="rc-cnav"><button class="btn ghost" data-act="rccook" data-id="prev" ${i === 0 ? "disabled" : ""}>← ${esc(L.back)}</button>
       <button class="btn" data-act="rccook" data-id="${i === n - 1 ? "finish" : "next"}">${i === n - 1 ? `✓ ${esc(L.finish)}` : `${esc(L.next)} →`}</button></div></div>`;
 }
+/* ---------- study: a page, a notebook and a guide for anything you learn from ----------
+   A podcast, book, article, paper, course or long video: a save itself, or a child of one (an action that recommends a single
+   resource, e.g. one of five episodes a reel lists). A child opens as its own page under its save: where it lives (Now, Up next),
+   where you left off, a notebook of what you keep from it (insights, quotes, questions, things to try, each with a timestamp
+   or page), and a study guide GSD writes on request (the `study` route). Starred notes show under the Library's 💎 Wisdom. */
+const LEARN_RES = ["podcast", "book", "article", "paper", "course", "video"];
+const resOf = a => item(a.item_id)?.resources?.[a.resource_idx] || null;
+const isStudyAct = a => LEARN_RES.includes(resOf(a)?.type);
+const studyKids = it => itemActs(it.id).filter(isStudyAct).sort((x, y) => x.resource_idx - y.resource_idx);
+const isStudyIt = it => !recOf(it) && !isRecipeIt(it) && !pending(it) && !isWis(it) && (["article", "book"].includes(it.kind) || it.kind === "video" && (it.duration_seconds || 0) >= 600 || !!it.study);
+const hlOf = (iid, aid) => S.highlights.filter(h => h.item_id === iid && (aid === undefined || (h.action_id || null) === (aid || null)));
+const HK = { insight: ["💡", "Insight", "What clicked? Put it in your own words."], quote: ["💬", "Quote", "Word for word, as they said it."], question: ["❓", "Question", "What do you want to find out or think about?"], todo: ["✅", "To try", "Something to do because of this."] };
+// The words for each kind of thing: what you do with it, finishing it, doing it now, one of it, many.
+const SW = { podcast: ["listen", "I listened", "Listening", "episode", "episodes", "Before you listen"], video: ["watch", "I watched it", "Watching", "video", "videos", "Before you watch"],
+  book: ["read", "I read it", "Reading", "book", "books", "Before you read"], article: ["read", "I read it", "Reading", "read", "reads", "Before you read"],
+  paper: ["read", "I read it", "Reading", "paper", "papers", "Before you read"], course: ["take", "I took it", "Taking", "course", "courses", "Before you start"],
+  mixed: ["learn from", "Done", "Doing", "thing to learn from", "things to learn from", "Before you start"] };
+const swOf = t => SW[t] || SW.mixed;
+// "1:02:03" or "41:05" in seconds (for sorting notes in order and finding the chapter you're in), else null.
+const secs = v => { const m = String(v || "").trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/); return !m ? null : m[3] != null ? +m[1] * 3600 + +m[2] * 60 + +m[3] : +m[1] * 60 + +m[2] };
+// A link you can play from: Spotify's embed player becomes the normal episode page; YouTube jumps to a timestamp.
+const playUrl = u => { u = safeUrl(u); if (!u) return ""; try { const x = new URL(u); if (/spotify\.com$/.test(x.hostname) && x.pathname.startsWith("/embed/")) { x.pathname = x.pathname.replace(/^\/embed/, "").replace(/\/video$/, ""); return x.href } } catch {} return u };
+const atUrl = (u, at) => { const t = secs(at); if (t == null || !/youtu\.?be/.test(u)) return ""; try { const x = new URL(u); x.searchParams.set("t", t + "s"); return x.href } catch { return "" } };
+// One thing to study, whether a whole save or a child of one.
+function subj(it, a) {
+  const r = a ? resOf(a) : null, type = a ? r?.type || "" : { article: "article", book: "book", video: "video" }[it.kind] || "";
+  return { it, a, r, type, row: a || it, table: a ? "actions" : "items", id: a ? a.id : it.id, key: `${it.id}|${a ? a.id : ""}`,
+    title: a ? r?.title || a.title : it.title || "Untitled", by: a ? r?.creator || "" : it.author || "", url: playUrl(a ? r?.url || a.link : it.url),
+    about: a ? r?.about || a.why || "" : "", g: (a || it).study, pos: (a || it).position || "", hl: hlOf(it.id, a ? a.id : null) };
+}
+const sortHl = l => [...l].sort((x, y) => { const a = secs(x.at), b = secs(y.at); return a != null && b != null ? a - b : a != null ? -1 : b != null ? 1 : new Date(y.created_at) - new Date(x.created_at) });
+function hlRow(h, from) {
+  const [em, kn] = HK[h.kind] || HK.insight, it = item(h.item_id), link = h.at && it ? atUrl(subjOfHl(h).url, h.at) : "";
+  return `<li class="nb-h k-${h.kind}"><span class="nb-em" title="${kn}" aria-label="${kn}">${em}</span><div class="nb-tx"><p>${esc(h.text)}</p>
+    <div class="nb-meta">${h.at ? link ? `<a class="nb-chip" href="${esc(link)}" target="_blank" rel="noopener noreferrer" title="Play from here">⏱ ${esc(h.at)} ↗</a>` : `<span class="nb-chip">⏱ ${esc(h.at)}</span>` : ""}
+      ${from ? `<button class="nb-from" data-act="${h.action_id ? "openact" : "open"}" data-id="${h.action_id || h.item_id}">${esc(from)} ›</button>` : `<span>${ago(h.created_at)}</span>`}</div></div>
+    <div class="nb-acts"><button class="nb-ib${h.starred ? " on" : ""}" data-act="hlstar" data-id="${h.id}" aria-pressed="${h.starred}" title="${h.starred ? "In 💎 Wisdom" : "Keep it in 💎 Wisdom"}" aria-label="${h.starred ? "Remove from Wisdom" : "Keep in Wisdom"}">${h.starred ? "★" : "☆"}</button>
+      ${from ? "" : `<button class="nb-ib" data-act="hldel" data-id="${h.id}" aria-label="Delete this note" title="Delete">${IC.x.replace('class="x-ic"', 'width="14" height="14"')}</button>`}</div></li>`;
+}
+const subjOfHl = h => subj(item(h.item_id), h.action_id ? actOf(h.action_id) : null);
+// The notebook: write what you keep, tagged with what kind of note it is and where in the thing it was.
+function notebook(sb_) {
+  const s = S.sheet, d = s.draft ||= { kind: "insight", text: "", at: null }, all = sortHl(sb_.hl), f = s.hlf && all.some(h => h.kind === s.hlf) ? s.hlf : "all";
+  const shown = f === "all" ? all : all.filter(h => h.kind === f), counts = Object.keys(HK).map(k => [k, all.filter(h => h.kind === k).length]).filter(([, n]) => n);
+  const tp = ["podcast", "video", "course"].includes(sb_.type) || sb_.it.kind === "video" ? "34:12" : "p. 112";
+  return `<section class="iv-sec nb" id="nb"><h3 class="iv-h">📓 Notebook <small>${all.length ? `${all.length} kept${all.some(h => h.starred) ? ` · ${all.filter(h => h.starred).length} in 💎 Wisdom` : ""}` : "what you take from it"}</small></h3>
+    <div class="nb-new">
+      <div class="nb-kinds" role="radiogroup" aria-label="Kind of note">${Object.entries(HK).map(([k, [e, n]]) => `<button role="radio" aria-checked="${d.kind === k}" class="${d.kind === k ? "on" : ""}" data-act="hlkind" data-id="${k}"><span aria-hidden="true">${e}</span> ${n}</button>`).join("")}</div>
+      <textarea class="nb-ta" id="hlt" rows="3" placeholder="${esc(HK[d.kind][2])}" aria-label="Your note">${esc(d.text || "")}</textarea>
+      <div class="nb-row"><label class="nb-at" title="Where in it: a timestamp or a page"><span aria-hidden="true">⏱</span><input id="hla" value="${esc(d.at ?? sb_.pos)}" placeholder="${tp}" maxlength="24" aria-label="Where in it (optional)" autocomplete="off"></label>
+        <span class="nb-tip">⌘/Ctrl + Enter</span><button class="nb-save" data-act="hladd" data-id="${sb_.key}">Keep it</button></div></div>
+    ${counts.length > 1 ? `<div class="nb-f" role="tablist" aria-label="Show">${[["all", `All ${all.length}`], ...counts.map(([k, n]) => [k, `${HK[k][0]} ${n}`])].map(([k, t]) => `<button role="tab" aria-selected="${f === k}" class="${f === k ? "on" : ""}" data-act="hlf" data-id="${k}">${t}</button>`).join("")}</div>` : ""}
+    ${all.length ? `<ol class="nb-list">${shown.map(h => hlRow(h)).join("")}</ol>` : `<p class="nb-empty">Notes you keep land here, in the order they come up. Star the best ones ☆ to keep them in 💎 Wisdom.</p>`}</section>`;
+}
+// Where you left off: a timestamp, a page or a chapter. New notes start from it.
+function posRow(sb_) {
+  const w = swOf(sb_.type), done = sb_.a ? sb_.a.status === "done" : !!sb_.it.done_at;
+  return `<div class="st-pos"><label for="pos"><span aria-hidden="true">📍</span> ${done ? "Finished" : sb_.pos ? `${w[2]}: you're at` : "Where you left off"}</label>
+    <input id="pos" data-pos="${sb_.table}|${sb_.id}" value="${esc(sb_.pos)}" placeholder="${["podcast", "video", "course"].includes(sb_.type) || sb_.it.kind === "video" ? "e.g. 41:05" : "e.g. p. 88"}" maxlength="40" autocomplete="off" enterkeyhint="done"></div>`;
+}
+// The study guide: what to listen or read for, the key ideas, chapters, one thing to try after. Made on request.
+function guide(sb_) {
+  const g = sb_.g, busy = S.studyBusy[sb_.id], w = swOf(sb_.type), ch = g?.chapters || [], at = secs(sb_.pos);
+  if (!g || busy) return `<section class="iv-sec"><div class="sg-cta">${busy ? `<span class="spin"></span><div><b>Reading the show notes and reviews…</b><span>Usually 20–40 seconds. You can keep writing notes meanwhile.</span></div>`
+    : `<span class="sg-em" aria-hidden="true">🧭</span><div><b>Get more out of it</b><span>A study guide: questions to ${w[0]} for, the key ideas${["podcast", "video", "course"].includes(sb_.type) ? ", the chapters" : ""} and one thing to try after.</span></div><button class="btn sm" data-act="mkstudy" data-id="${sb_.key}">✨ Make the guide</button>`}</div></section>`;
+  const cur = at == null ? -1 : ch.reduce((k, c, i) => secs(c.at) != null && secs(c.at) <= at ? i : k, -1);
+  return `<section class="iv-sec sg"><h3 class="iv-h">🧭 Study guide <button data-act="mkstudy" data-id="${sb_.key}" title="Write it again">↻ Redo</button></h3>
+    ${g.one_liner ? `<p class="sg-one">${esc(g.one_liner)}</p>` : ""}
+    ${(g.people || []).length || g.minutes ? `<div class="iv-xcs" style="margin:12px 0 0">${g.minutes ? `<span class="iv-xc hi">⏱ ${rcTime(g.minutes, { h: "h", min: "min" })}</span>` : ""}${(g.people || []).map(p => `<span class="iv-xc">${esc(p.name)}${p.role ? ` · ${esc(p.role)}` : ""}</span>`).join("")}</div>` : ""}
+    ${(g.before || []).length ? `<h4 class="sg-h">${esc(w[5])}</h4><p class="sg-sub">Hold these in mind. Tap one to answer it in your notebook.</p><ol class="sg-q">${g.before.map((q, k) => `<li><button data-act="hlq" data-id="${k}">${esc(q)}<span aria-hidden="true">✎</span></button></li>`).join("")}</ol>` : ""}
+    ${(g.key_ideas || []).length ? `<h4 class="sg-h">Key ideas</h4><div class="iv-cols">${g.key_ideas.map(k => `<div class="iv-x sg-idea"><h4>${esc(k.idea)}</h4>${k.detail ? `<p>${esc(k.detail)}</p>` : ""}</div>`).join("")}</div>` : ""}
+    ${ch.length ? `<h4 class="sg-h">Chapters</h4><p class="sg-sub">Tap one to mark where you are.</p><ol class="sg-ch">${ch.map((c, k) => `<li><button class="${k === cur ? "on" : ""}" data-act="chap" data-id="${esc(c.at)}"><span class="nb-chip">${esc(c.at)}</span><span>${esc(c.title)}</span>${k === cur ? '<em>you\'re here</em>' : ""}</button></li>`).join("")}</ol>` : ""}
+    ${g.try_after ? `<div class="sg-try"><span aria-hidden="true">🛠️</span><div><b>Try after</b><p>${esc(g.try_after)}</p></div><button class="btn sm ghost" data-act="trynext" data-id="${sb_.key}">+ Add to the plan</button></div>` : ""}
+    ${(g.sources || []).length ? `<p class="sg-src">From ${g.sources.map(x => `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.title || hostOf(x.url))}</a>`).join(" · ")}. Check it against what you hear.</p>` : ""}</section>`;
+}
+// On a save: the episodes (books, reads…) it recommends, each its own page, with how far you are.
+function seriesSec(it) {
+  const kids = studyKids(it); if (!kids.length) return "";
+  const types = kids.map(a => resOf(a).type), t = types.every(x => x === types[0]) ? types[0] : "mixed", w = swOf(t), pid = planOf(it)?.id;
+  const done = kids.filter(a => a.status === "done").length, notes = hlOf(it.id).filter(h => h.action_id).length;
+  return `<section class="iv-sec"><h3 class="iv-h">${RES[t] || "📚"} ${kids.length} ${kids.length === 1 ? w[3] : w[4]} <small>${done} of ${kids.length} done${notes ? ` · 📓 ${notes}` : ""}</small></h3>
+    <div class="sr-bar" role="img" aria-label="${done} of ${kids.length} done"><i style="width:${done / kids.length * 100}%"></i></div>
+    <ol class="sr">${kids.map((a, k) => { const r = resOf(a), n = hlOf(it.id, a.id).length, isDone = a.status === "done";
+      const st = a.lane === "now" ? `<span class="sr-pill now">⚡ Now</span>` : a.lane === "next" ? `<span class="sr-pill">⏭ Up next</span>` : isDone ? `<span class="sr-pill done">✓ ${esc(swOf(r.type)[1].replace(/^I /, "").replace(/ it$/, "") || "Done")}</span>` : a.position ? `<span class="sr-pill">📍 ${esc(a.position)}</span>` : a.id === pid ? `<span class="sr-pill">📌 Plan</span>` : "";
+      return `<li><button class="sr-row${isDone ? " done" : ""}" data-act="openact" data-id="${a.id}"><span class="sr-n" aria-hidden="true">${isDone ? "✓" : k + 1}</span>
+        <span class="sr-tx"><b>${esc(r.title || a.title)}</b><span>${esc([RES[r.type] + " " + cap1(r.type), r.creator, a.study?.minutes ? rcTime(a.study.minutes, { h: "h", min: "min" }) : ""].filter(Boolean).join(" · "))}${n ? ` · 📓 ${n}` : ""}</span></span>
+        ${st}<span class="sr-go" aria-hidden="true">›</span></button></li>` }).join("")}</ol></section>`;
+}
+// On a save: the latest notes from its children, each a step back into the page it came from.
+function kidNotes(it) {
+  const l = hlOf(it.id).filter(h => h.action_id && actOf(h.action_id)).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  if (!l.length) return "";
+  return `<section class="iv-sec nb"><h3 class="iv-h">📓 From your notebooks <small>${l.length}</small></h3><ol class="nb-list">${l.slice(0, S.sheet.allNotes ? 200 : 5).map(h => hlRow(h, subjOfHl(h).title)).join("")}</ol>
+    ${l.length > 5 && !S.sheet.allNotes ? `<button class="iv-addnote lgb" style="margin-top:10px" data-act="allnotes">Show all ${l.length}</button>` : ""}</section>`;
+}
+// A child's own page, beside a cover made from what it is (and its save's picture).
+function kidCover(sb_) {
+  const it = sb_.it, a = sb_.a, img = thumbUrl(it), em = a && sb_.r ? RES[sb_.type] || "✨" : (MODE[a.mode] || MODE.grow)[0], w = swOf(sb_.type);
+  const label = sb_.r ? cap1(sb_.type) : (MODE[a.mode] || MODE.grow)[1];
+  return `<div class="iv-card kc">
+    <div class="kc-art"${img ? ` style="--img:url('${esc(img)}')"` : ""}><span class="kc-em" aria-hidden="true">${em}</span>
+      <div class="kc-tx"><span class="kc-k">${esc(label)}${sb_.g?.minutes ? ` · ${rcTime(sb_.g.minutes, { h: "h", min: "min" })}` : ""}</span><b>${esc(sb_.title)}</b>${sb_.by ? `<span>${esc(sb_.by)}</span>` : ""}</div>
+      ${sb_.url ? `<a class="kc-play lgb" href="${esc(sb_.url)}" target="_blank" rel="noopener noreferrer">${IC.play} ${esc(sb_.r ? RES_LABEL[sb_.type] || "Open it" : a.link_label || "Open it")} ↗</a>` : ""}</div>
+    <button class="iv-cap kc-from" data-act="open" data-id="${it.id}" aria-label="Back to the save: ${esc(it.title || "")}"><span class="kc-th">${thumb(it, "slot-th sm")}</span>
+      <div><span>From your save${studyKids(it).length > 1 && a && isStudyAct(a) ? ` · ${studyKids(it).findIndex(x => x.id === a.id) + 1} of ${studyKids(it).length} ${w[4]}` : ""}</span><b>${esc(it.title || "Untitled")}</b></div><span class="go" aria-hidden="true">›</span></button></div>`;
+}
+function kidMenu(sb_) {
+  const a = sb_.a, it = sb_.it, isPlan = planOf(it)?.id === a.id;
+  return `<div class="iv-catch" data-act="menuclose"></div><div class="iv-menu lg" role="menu">
+    ${sb_.url ? `<a role="menuitem" href="${esc(sb_.url)}" target="_blank" rel="noopener noreferrer" data-act="menuclose"><span aria-hidden="true">↗</span>Open it</a><button role="menuitem" data-act="copy" data-id="${esc(sb_.url)}"><span aria-hidden="true">🔗</span>Copy link</button>` : ""}
+    <button role="menuitem" data-act="open" data-id="${it.id}"><span aria-hidden="true">↩</span>Go to the save</button>
+    ${!isPlan && !a.lane && a.status !== "done" ? `<button role="menuitem" data-act="plan" data-id="${a.id}"><span aria-hidden="true">📌</span>Make it the plan</button>` : ""}
+    ${isStudyAct(a) && sb_.g ? `<button role="menuitem" data-act="mkstudy" data-id="${sb_.key}"><span aria-hidden="true">🧭</span>Write the guide again</button>` : ""}
+    ${a.status !== "done" && !a.lane ? `<button role="menuitem" data-act="dismiss" data-id="${a.id}"><span aria-hidden="true">🍃</span>Not for me</button>` : ""}</div>`;
+}
+function kidBody(sb_) {
+  const a = sb_.a, it = sb_.it, w = swOf(sb_.type), study = isStudyAct(a), done = a.status === "done", d = daysIn(a), link = sb_.url;
+  const kids = studyKids(it), k = kids.findIndex(x => x.id === a.id), prev = kids[k - 1], next = kids[k + 1];
+  const meta = [sb_.by, a.lane === "now" ? `⚡ In Now · ${d ? `${d} day${d > 1 ? "s" : ""}` : "since today"}` : a.lane === "next" ? "⏭ Up next" : done ? `✓ ${w[1].replace(/^I /, "")} ${ago(a.done_at)}` : "", planOf(it)?.id === a.id ? "📌 the plan for its save" : ""].filter(Boolean).join(" · ");
+  return `<div class="iv-head kid-head">
+      <button class="kid-crumb lgb" data-act="open" data-id="${it.id}" aria-label="Back to ${esc(it.title || "the save")}">${IC.back}<span>${esc(it.title || "Your save")}</span></button>
+      <div class="iv-tools"><button class="iv-ic lgb" data-act="ivmenu" aria-label="More options" aria-haspopup="menu" aria-expanded="${!!S.sheet.menu}">${IC.more}</button>${S.sheet.menu ? kidMenu(sb_) : ""}</div></div>
+    <p class="kid-k">${study ? `${RES[sb_.type] || "📚"} ${esc(cap1(sb_.type))}${k >= 0 && kids.length > 1 ? ` · ${k + 1} of ${kids.length}` : ""}` : `${(MODE[a.mode] || MODE.grow)[0]} ${(MODE[a.mode] || MODE.grow)[1]} · ${a.minutes} min`}</p>
+    <h2 class="iv-title">${esc(sb_.title)}</h2>
+    ${meta ? `<p class="iv-meta">${esc(meta)}</p>` : ""}
+    ${done ? "" : `<div class="iv-lane" role="group" aria-label="Where this lives">${[["now", "⚡ Now"], ["next", "⏭ Up next"], ["", "🗂️ With its save"]].map(([kk, n]) => `<button class="iv-seg${(a.lane || "") === kk ? " on" : ""}" data-act="kidlane" data-id="${a.id}|${kk}" aria-pressed="${(a.lane || "") === kk}">${n}</button>`).join("")}</div>`}
+    <div class="kid-go">${link && !done ? `<a class="kid-play lgb" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${IC.play}${esc(study ? cap1(w[0]) + " now" : a.link_label || "Open it")} ↗</a>` : ""}
+      ${done ? "" : a.lane === "now" ? `<button class="kid-done green lgb" data-act="finish" data-id="${a.id}">✓ Done · earns ${passMin()} min</button>` : `<button class="kid-done lgb" data-act="finish" data-id="${a.id}">✓ ${esc(study ? w[1] : "I did it")}</button>`}</div>
+    ${done ? `<div class="iv-done"><b>✓ ${esc(study ? w[1].replace(/^I /, "") : "Done")}</b><span>${ago(a.done_at)}</span>${a.reflection && !a.reflection.startsWith("dismissed:") ? `<p>${esc(a.reflection)}</p>` : ""}</div>` : ""}
+    ${sb_.about ? `<p class="iv-sum">${esc(sb_.about)}</p>` : ""}${sb_.r?.note ? `<p class="iv-meta">${esc(sb_.r.note)}</p>` : ""}
+    ${!study && a.why && a.why !== sb_.about ? `<p class="iv-sum">${esc(a.why)}</p>` : ""}
+    ${!done && (a.first_step || a.steps?.length) ? `<div class="iv-x kid-steps">${a.first_step ? `<p style="color:inherit;margin:0"><b>Start:</b> ${esc(a.first_step)}</p>` : ""}${a.steps?.length ? `<ul class="tk small">${a.steps.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>` : ""}
+    ${study ? posRow(sb_) : ""}
+    ${notebook(sb_)}
+    ${study ? guide(sb_) : ""}
+    ${prev || next ? `<nav class="kid-nav" aria-label="The other ${esc(w[4])}">${prev ? `<button data-act="openact" data-id="${prev.id}"><span>‹ Previous</span><b>${esc(resOf(prev).title)}</b></button>` : "<span></span>"}${next ? `<button class="nx" data-act="openact" data-id="${next.id}"><span>Next ›</span><b>${esc(resOf(next).title)}</b></button>` : "<span></span>"}</nav>` : ""}`;
+}
 function ivLane(it) {
   const cur = it.lane || "", gone = it.status === "let_go";
   return `<div class="iv-lane" role="group" aria-label="Where this save lives">${[["now", "⚡ Now"], ["next", "⏭ Up next"], ["", "📚 Library"]].map(([k, n]) => `<button class="iv-seg${!gone && cur === k ? " on" : ""}" data-act="ivlane" data-id="${it.id}|${k}" aria-pressed="${!gone && cur === k}">${n}</button>`).join("")}</div>
@@ -1120,6 +1261,9 @@ function ivBody(it) {
   const meta = [sname || hostOf(u), "saved " + ago(it.created_at), it.resaved_count ? `saved ${it.resaved_count + 1} times` : "",
     it.lane === "now" ? `⚡ In Now · ${d ? `${d} day${d > 1 ? "s" : ""}` : "since today"}` : it.lane === "next" ? "⏭ Up next" : it.status === "let_go" ? "🍃 Let go" : it.status === "inbox" ? "Unsorted" : `${sh.em} ${sh.name}`].filter(Boolean).join(" · ");
   const noteOpen = S.sheet.noteOpen || it.note, r = recOf(it), recipe = isRecipeIt(it);
+  // Children you learn from (episodes, books, reads) get their own list and pages; the rest stay ideas for doing it.
+  const kids = studyKids(it), kidIds = new Set(kids.map(a => a.id)), others = acts.filter(a => !kidIds.has(a.id)), sIt = isStudyIt(it) ? subj(it) : null;
+  const mentioned = (it.resources || []).filter((_, k) => !kids.some(a => a.resource_idx === k));
   if (r) return `${ivHead(it)}
     ${(it.tags || []).length ? `<div class="iv-tags">${it.tags.map(x => `<button class="iv-tag lgb" data-act="ivtag" data-id="${esc(x)}">${esc(tagLabel(x))}</button>`).join("")}</div>` : ""}
     <h2 class="iv-title">${esc(it.title || "Untitled")}</h2>
@@ -1147,18 +1291,20 @@ function ivBody(it) {
       <div class="row" style="margin-top:10px"><button class="btn sm" data-act="reprocess" data-id="${it.id}">Re-read</button></div></div>` : ""}
     ${it.summary ? `<p class="iv-sum">${esc(it.summary)}</p>` : ""}
     ${recipe && it.stage === "ready" ? rcPending(it) : ""}
+    ${seriesSec(it)}${kidNotes(it)}
+    ${sIt ? posRow(sIt) + notebook(sIt) + guide(sIt) : ""}
     <hr class="iv-hr">
     ${noteOpen ? `<div class="iv-note"><label class="iv-lbl" for="note">${IC.doc.replace("<svg", '<svg width="18" height="18"')} Your note</label><textarea class="field" id="note" data-note="${it.id}" placeholder="Why it matters to you" rows="3">${esc(it.note || "")}</textarea></div>`
       : `<button class="iv-addnote lgb" data-act="ivnote">${IC.doc} Add a note</button>`}
     <section class="iv-sec"><h3 class="iv-h">How to do it <button data-act="ownact" data-id="${it.id}">+ Your own</button></h3>
-      ${acts.length > 1 ? `<p class="small mute" style="margin:-6px 0 14px">Put the whole save in Now, or give any single one of these its own slot.</p>` : ""}
-      ${acts.length ? `<div class="iv-cols">${acts.map(a => actRow(a, it)).join("")}</div>` : `<p class="small mute">No plan yet. Add your own, or just do it and tap ✓.</p>`}
+      ${others.length > 1 || kids.length ? `<p class="small mute" style="margin:-6px 0 14px">Put the whole save in Now, or give any single one ${kids.length ? `of these, or of the ${esc(swOf(kids.every(a => resOf(a).type === resOf(kids[0]).type) ? resOf(kids[0]).type : "mixed")[4])} above,` : "of these"} its own slot.</p>` : ""}
+      ${others.length ? `<div class="iv-cols">${others.map(a => actRow(a, it)).join("")}</div>` : kids.length ? "" : `<p class="small mute">No plan yet. Add your own, or just do it and tap ✓.</p>`}
       ${it.stage === "ready" ? `<form data-form="steer" data-id="${it.id}" class="row" style="margin-top:4px"><input class="field" id="steer" style="flex:1;min-width:160px" placeholder="Different ideas… (optional: “outdoors”, “shorter”)" aria-label="Steer new ideas"><button class="btn sm ghost" ${S.busy ? "disabled" : ""}>${S.busy ? '<span class="spin"></span>' : "Different ideas"}</button></form>` : ""}</section>
     ${it.takeaways?.length ? `<section class="iv-sec"><h3 class="iv-h">Key points</h3><ol class="iv-pts">${it.takeaways.map(k => `<li>${esc(k.text)}${k.t != null && it.source === "youtube" && u ? ` <a class="chip" style="padding:2px 8px" target="_blank" rel="noopener noreferrer" href="${esc(u + (u.includes("?") ? "&" : "?") + "t=" + k.t + "s")}">${ts(k.t)}</a>` : ""}</li>`).join("")}</ol></section>` : ""}
     ${(it.quotes || []).length ? `<section class="iv-sec"><div class="iv-cols">${it.quotes.map(q => `<blockquote class="iv-quote">${esc(q)}</blockquote>`).join("")}</div></section>` : ""}
     ${ivEntities(it)}
-    ${(it.resources || []).length ? `<section class="iv-sec"><h3 class="iv-h">Mentioned <small>${it.enrich_state === "pending" ? '<span class="spin"></span> Finding the links…' : it.resources.length}</small></h3>
-      <div class="iv-cols">${it.resources.map(r => resCard(r, it)).join("")}</div></section>` : ""}
+    ${mentioned.length ? `<section class="iv-sec"><h3 class="iv-h">Mentioned <small>${it.enrich_state === "pending" ? '<span class="spin"></span> Finding the links…' : mentioned.length}</small></h3>
+      <div class="iv-cols">${mentioned.map(r => resCard(r, it)).join("")}</div></section>` : ""}
     ${rel?.length ? `<section class="iv-sec"><h3 class="iv-h">Related saves</h3><div class="iv-rel">${rel.map(tile).join("")}</div></section>` : ""}
     <p class="iv-foot">${[it.opened_count ? `Opened ${it.opened_count} time${it.opened_count === 1 ? "" : "s"}` : "", it.quality === "caption_only" ? "Read from the caption only" : it.quality === "title_only" ? "Only the title was readable" : "", it.deep_read ? "Read fully" : "", it.supadata_credits ? `${crWord(it.supadata_credits)} used` : ""].filter(Boolean).join(" · ")}</p>
     ${canReadFully(it) && it.quality !== "full" ? `<div class="row" style="justify-content:center;margin-top:10px"><button class="btn sm ghost" data-act="readfull" data-id="${it.id}" ${fullBlocked() ? "disabled" : ""}>🎧 Read it fully</button></div><p class="tiny" style="text-align:center;margin-top:6px">${fullBlocked() ? `Only ${crWord(crLeft())} left, kept for quick reads.` : `Watches the clip and transcribes what is said: ${costText(fullCost(it))}.`}</p>` : ""}`;
@@ -1166,14 +1312,15 @@ function ivBody(it) {
 let ivStatic = false;
 function itemView(it) {
   if (!it) return `<div class="overlay" data-act="backdrop"><div class="sheet" role="dialog" aria-modal="true"><button class="x" data-act="close" aria-label="Close">✕</button><p>This save is gone.</p></div></div>`;
+  const a = S.sheet.act ? actOf(S.sheet.act) : null, kid = a && a.item_id === it.id ? subj(it, a) : null;
   const img = thumbUrl(it), h = Math.round(hash(it.id) * 360);
   const amb = img ? `url('${img}')` : `radial-gradient(circle at 18% 12%,hsl(${h} 72% 64%),transparent 58%),radial-gradient(circle at 85% 82%,hsl(${(h + 40) % 360} 62% 56%),transparent 60%),hsl(${h} 42% 44%)`;
-  return `<div class="iv${ivStatic ? " static" : ""}" data-id="${it.id}" data-act="backdrop" style="--tint:${TINT.get(it.thumb_path) || fallbackTint(it)};--amb:${esc(amb)}" role="dialog" aria-modal="true" aria-label="${esc(it.title || "Save")}">
+  return `<div class="iv${ivStatic ? " static" : ""}${kid ? " kid" : ""}" data-id="${kid ? a.id : it.id}" data-item="${it.id}" data-act="backdrop" style="--tint:${TINT.get(it.thumb_path) || fallbackTint(it)};--amb:${esc(amb)}" role="dialog" aria-modal="true" aria-label="${esc(kid ? kid.title : it.title || "Save")}">
     <div class="iv-win"><div class="iv-amb" aria-hidden="true"><i></i></div>
       <button class="iv-back lg warp lgb" data-act="close" aria-label="Close">${IC.back}${IC.x}</button>
       <div class="iv-scroll" id="ivs"><div class="iv-grid">
-        <section class="iv-media" aria-label="Original">${ivMedia(it)}</section>
-        <section class="iv-sheet lg">${ivBody(it)}</section>
+        <section class="iv-media" aria-label="${kid ? "What it is" : "Original"}">${kid ? kidCover(kid) : ivMedia(it)}</section>
+        <section class="iv-sheet lg">${kid ? kidBody(kid) : ivBody(it)}</section>
       </div></div>
       <div class="rc-tray" id="rctray" aria-live="off">${trayHtml()}</div>
       ${S.sheet.cook != null && recOf(it) ? rcCook(it, recOf(it)) : ""}</div></div>`;
@@ -1186,7 +1333,7 @@ function ivMount(same, top) {
   sc.addEventListener("scroll", () => { if (!raf) raf = requestAnimationFrame(upd) }, { passive: true }); upd();
   sc.addEventListener("touchend", () => { if (sc.scrollTop < -70) H.close() }, { passive: true }); // pull down past the top to close (iOS rubber band)
   if (!same) $(".iv-back", iv).focus({ preventScroll: true });
-  const it = item(iv.dataset.id);
+  const it = item(iv.dataset.item);
   if (it?.thumb_path && !TINT.has(it.thumb_path)) tintFor(it).then(t => { if (t && iv.isConnected) { iv.style.setProperty("--tint", t); setThemeColor() } });
 }
 
@@ -1227,14 +1374,15 @@ let lastTab = "";
 function renderSheet() {
   const host = $("#sheet"), prev = host.firstElementChild;
   // Re-rendering the same open save (polling, a toggle, related saves arriving) keeps its scroll, skips the entrance and keeps what you're typing.
-  const same = S.sheet?.type === "item" && prev?.classList.contains("iv") && prev.dataset.id === S.sheet.id, top = same ? $("#ivs")?.scrollTop || 0 : 0;
+  const same = S.sheet?.type === "item" && prev?.classList.contains("iv") && prev.dataset.id === (S.sheet.act || S.sheet.id), top = same ? $("#ivs")?.scrollTop || 0 : 0;
   const ae = document.activeElement, keep = same && ae?.id && host.contains(ae) && /^(TEXTAREA|INPUT)$/.test(ae.tagName) ? { id: ae.id, v: ae.value, a: ae.selectionStart, b: ae.selectionEnd } : null;
   const sameSheet = prev?.classList.contains("overlay") && prev.dataset.type === S.sheet?.type; // a re-render of the same sheet must not slide in again
   ivStatic = same; host.innerHTML = sheetHtml(); ivStatic = false;
   if (sameSheet) host.firstElementChild?.classList.add("static");
   document.body.style.overflow = S.sheet ? "hidden" : "";
   if (S.sheet?.type === "item") ivMount(same, top);
-  if (keep) { const el = document.getElementById(keep.id); if (el) { el.value = keep.v; el.focus({ preventScroll: true }); try { el.setSelectionRange(keep.a, keep.b) } catch {} } }
+  // The notebook's fields render from their draft (kept on every keystroke), which a save or a guide question may just have changed.
+  if (keep) { const el = document.getElementById(keep.id); if (el) { if (!["hlt", "hla"].includes(keep.id)) el.value = keep.v; el.focus({ preventScroll: true }); try { el.setSelectionRange(keep.a, keep.b) } catch {} } }
   setThemeColor(); syncHistory(); wakeSync();
 }
 function openSheet(s) { S.sheet = s; confirmDel = null; renderSheet() }
@@ -1278,6 +1426,8 @@ function fileToJpeg(file) {
 }
 
 /* ---------- actions ---------- */
+// What the open page studies: a child, or a save that is something to learn from.
+function curSubj() { const s = S.sheet, it = s?.type === "item" && item(s.id); if (!it) return null; const a = s.act ? actOf(s.act) : null; return a ? subj(it, a) : isStudyIt(it) ? subj(it) : null }
 const H = {
   tab(id) { S.tab = id; S.sheet = null; S.folder = ""; refresh(); scrollTo(0, 0) },
   save(id) { openSheet({ type: "save", lane: ["now", "next"].includes(id) ? id : "library", full: !!S.profile.full_read }); setTimeout(() => $("#sv")?.focus(), 50) },
@@ -1337,6 +1487,50 @@ const H = {
       if (!S.related[id]) { const { data } = await sb.rpc("related_items", { p_item: id, p_count: 5 }); S.related[id] = (data || []).filter(r => r.similarity >= .5).map(r => item(r.item_id)).filter(Boolean).slice(0, 3); if (S.sheet?.id === id && S.related[id].length) renderSheet() }
     }
   },
+  /* ---- a child's own page, notebooks and study guides ---- */
+  openact(aid) { const a = actOf(aid); if (!a?.item_id || !item(a.item_id)) return; openSheet({ type: "item", id: a.item_id, act: aid }) },
+  async kidlane(v) { const [id, k] = v.split("|"), a = actOf(id); if (!a || (a.lane || "") === k) return;
+    if (k === "now") return H.toNow(id);
+    if (k === "next") { if (await H.toNext(id)) toast("⏭ In Up next"); return }
+    H.tolib(id) },
+  hlkind(k) { const d = S.sheet.draft ||= {}; d.kind = HK[k] ? k : "insight"; d.text = $("#hlt")?.value ?? d.text; renderSheet(); $("#hlt")?.focus({ preventScroll: true }) },
+  hlf(k) { S.sheet.hlf = k; renderSheet() },
+  allnotes() { S.sheet.allNotes = true; renderSheet() },
+  async hladd(key) {
+    const [iid, aid] = key.split("|"), s = S.sheet, d = s.draft ||= { kind: "insight" }, text = ($("#hlt")?.value || "").trim(), at = ($("#hla")?.value || "").trim().slice(0, 24);
+    if (!text) return $("#hlt")?.focus();
+    const { data, error } = await sb.from("highlights").insert({ item_id: iid, action_id: aid || null, kind: d.kind || "insight", text: text.slice(0, 4000), at }).select().single();
+    if (error) { console.error(error); return toast("Couldn't keep that note") }
+    S.highlights.unshift(data); s.draft = { kind: d.kind, text: "", at: null };
+    // A note further in than where you left off moves your place along.
+    const row = aid ? actOf(aid) : item(iid);
+    if (row && secs(at) != null && (!row.position || secs(row.position) != null && secs(row.position) < secs(at))) await api.upd(aid ? "actions" : "items", row.id, { position: at }).catch(() => {});
+    if (S.sheet === s) { renderSheet(); $("#hlt")?.focus({ preventScroll: true }) }
+    toast(`${HK[data.kind][0]} Kept${at ? ` at ${at}` : ""}`) },
+  async hlstar(id) { const h = S.highlights.find(x => x.id === id); if (!h) return;
+    try { await api.upd("highlights", id, { starred: !h.starred }) } catch { return }
+    S.sheet ? renderSheet() : render(); toast(h.starred ? "💎 Kept in Wisdom" : "Out of Wisdom") },
+  async hldel(id) { const h = S.highlights.find(x => x.id === id); if (!h) return;
+    await api.del("highlights", id); renderSheet();
+    toast("Note deleted", async () => { const { id: _, user_id, updated_at, ...row } = h, { data } = await sb.from("highlights").insert({ id: h.id, ...row }).select().single();
+      if (data) { S.highlights.push(data); S.highlights.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)) } S.sheet ? renderSheet() : render() }) },
+  hlq(k) { const sj = curSubj(), q = sj?.g?.before?.[Number(k)]; if (!q) return;
+    S.sheet.draft = { ...(S.sheet.draft || {}), kind: "insight", text: `${q}
+→ ` }; renderSheet();
+    const t = $("#hlt"); if (t) { t.scrollIntoView({ block: "center", behavior: "smooth" }); t.focus({ preventScroll: true }); t.setSelectionRange(t.value.length, t.value.length) } },
+  async chap(at) { const sj = curSubj(); if (!sj) return;
+    try { await api.upd(sj.table, sj.id, { position: at }) } catch { return }
+    if (S.sheet.draft) S.sheet.draft.at = null; renderSheet(); toast(`📍 You're at ${at}`) },
+  async mkstudy(key) { const [iid, aid] = key.split("|"), k = aid || iid; if (S.studyBusy[k]) return; S.sheet && (S.sheet.menu = false);
+    S.studyBusy[k] = true; renderSheet();
+    const r = await api.fn("study", { item_id: iid, action_id: aid || null }); delete S.studyBusy[k];
+    if (r?.study) { const row = aid ? actOf(aid) : item(iid); if (row) row.study = r.study }
+    else toast(r?.error === "daily_limit" ? r.message : r?.error === "ai_not_configured" ? "The AI key isn't set up yet." : "Couldn't make the guide: " + (r?.message || r?.error || "try again"));
+    if (S.sheet?.type === "item") renderSheet() },
+  async trynext(key) { const [iid, aid] = key.split("|"), it = item(iid); if (!it) return; const sj = subj(it, aid ? actOf(aid) : null), t = (sj.g?.try_after || "").slice(0, 160); if (!t) return;
+    if (itemActs(iid).some(a => a.title === t)) return toast("It's already with the save's ideas");
+    await api.ins("actions", { item_id: iid, title: t, why: `From ${sj.title}`.slice(0, 300), mode: "grow", status: "suggested", origin: "user", minutes: S.profile.daily_minutes || 15 });
+    renderSheet(); toast("🛠️ Added to the save's ideas: give it a slot from there") },
   /* ---- Now, Up next and the library ---- */
   async toNow(id, plan) {
     const it = item(id); // a whole save gets its default plan recorded; a single action is its own plan
@@ -1485,7 +1679,7 @@ const H = {
   dismiss(id) { openSheet({ type: "dismiss", id, back: S.sheet }) },
   async dismissed(v) { const [id, why] = v.split("|"); const back = S.sheet?.back;
     if (why === "did") await api.upd("actions", id, { status: "done", done_at: now() }); else await api.upd("actions", id, { status: "dismissed", reflection: why === "big" ? "dismissed: too big" : "dismissed: not interested" });
-    S.sheet = back?.type === "item" ? back : null; refresh() },
+    S.sheet = back?.type === "item" ? (back.act === id ? { type: "item", id: back.id } : back) : null; refresh() },
   ownact(id) { openSheet({ type: "ownact", item: id || "" }); setTimeout(() => $("#oa")?.focus(), 50) },
   async addown(id) { const t = $("#oa").value.trim(), it = item(id); if (!t || !it) return;
     const a = await api.ins("actions", { item_id: id, title: t.slice(0, 160), mode: $("#om").value, status: "suggested", origin: "user", minutes: S.profile.daily_minutes || 15 });
@@ -1623,6 +1817,7 @@ document.addEventListener("submit", async e => {
     S.user = r.data.user; start() }
 });
 document.addEventListener("input", e => {
+  if ((e.target.id === "hlt" || e.target.id === "hla") && S.sheet?.type === "item") { const d = S.sheet.draft ||= { kind: "insight" }; if (e.target.id === "hlt") d.text = e.target.value; else d.at = e.target.value }
   if (e.target.id === "q") { S.q = e.target.value; $("#libgrid").innerHTML = libList(); gfMount() }
   if (e.target.id === "pq" && S.sheet?.type === "pick") { S.sheet.q = e.target.value; $("#picklist").innerHTML = pickList() }
 });
@@ -1632,6 +1827,14 @@ document.addEventListener("change", async e => {
   if (t.dataset.save) { const k = t.dataset.save, num = ["daily_minutes", "weekly_goal", "pass_minutes", "pass_cap"].includes(k);
     api.profile({ [k]: num ? Number(t.value) : t.value.trim(), onboarded_at: S.profile.onboarded_at || now() }).then(() => { toast("Saved"); if (num) render() }) }
   if (t.dataset.note) api.upd("items", t.dataset.note, { note: t.value.trim() }).then(() => toast("Note saved")).catch(() => {});
+  // Where you left off. No redraw here: this fires on blur, often from a tap on something else.
+  if (t.dataset.pos) { const [tb, id] = t.dataset.pos.split("|"), v = t.value.trim().slice(0, 40), row = tb === "actions" ? actOf(id) : item(id); if (!row || (row.position || "") === v) return;
+    api.upd(tb, id, { position: v }).then(() => { const a = $("#hla"); if (a && S.sheet?.draft?.at == null) a.value = v; toast(v ? `📍 Saved: ${v}` : "Cleared") }).catch(() => {}) }
+});
+document.addEventListener("keydown", e => {
+  if (e.isComposing || e.key !== "Enter") return;
+  if ((e.target.id === "hlt" && (e.metaKey || e.ctrlKey)) || e.target.id === "hla") { e.preventDefault(); const b = $(".nb-save"); if (b) H.hladd(b.dataset.id) }
+  else if (e.target.id === "pos") { e.preventDefault(); e.target.blur() }
 });
 document.addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing && ["fnew", "mnew"].includes(e.target.id)) { e.preventDefault(); e.target.id === "fnew" ? H.fadd() : H.movenew() } });
 document.addEventListener("keydown", e => { if (e.key !== "Escape" || !S.sheet) return; if (S.sheet.menu) { S.sheet.menu = false; renderSheet(); $(".iv-tools .iv-ic")?.focus() } else H.close() });
